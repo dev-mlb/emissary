@@ -100,6 +100,11 @@
         <version>${dep.jcommander.version}</version>
       </dependency>
       <dependency>
+        <groupId>com.esotericsoftware</groupId>
+        <artifactId>kryo</artifactId>
+        <version>5.2.0</version>
+      </dependency>
+      <dependency>
         <groupId>com.fasterxml.jackson.core</groupId>
         <artifactId>jackson-annotations</artifactId>
         <version>${dep.jackson.version}</version>
@@ -451,6 +456,12 @@
         <artifactId>mockito-core</artifactId>
         <version>${dep.mockito-core.version}</version>
         <scope>test</scope>
+        <exclusions>
+          <exclusion>
+            <groupId>org.objenesis</groupId>
+            <artifactId>objenesis</artifactId>
+          </exclusion>
+        </exclusions>
       </dependency>
       <dependency>
         <groupId>oro</groupId>
@@ -468,6 +479,10 @@
     <dependency>
       <groupId>com.beust</groupId>
       <artifactId>jcommander</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>com.esotericsoftware</groupId>
+      <artifactId>kryo</artifactId>
     </dependency>
     <dependency>
       <groupId>com.fasterxml.jackson.core</groupId>
