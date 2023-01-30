@@ -15,7 +15,6 @@ import emissary.directory.DirectoryPlace;
 import emissary.directory.EmissaryNode;
 import emissary.place.IServiceProviderPlace;
 import emissary.pool.AgentPool;
-import emissary.pool.MoveSpool;
 import emissary.roll.RollManager;
 import emissary.server.mvc.ThreadDumpAction;
 import emissary.server.mvc.ThreadDumpAction.ThreadDumpInfo;
@@ -297,12 +296,6 @@ public class EmissaryServer {
             DirectoryPlace.lookup().shutDown();
         } catch (Exception e) {
             LOG.warn("Problem shutting down DirectoryPlace", e);
-        }
-
-        try {
-            MoveSpool.lookup().quit();
-        } catch (Exception e) {
-            LOG.warn("Problem stopping MoveSpool", e);
         }
 
         // Stop the places

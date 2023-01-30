@@ -13,7 +13,6 @@ import javax.servlet.ServletContextListener;
  * Initialize the application from inside the webapp context This initializer performs the following actions
  * <ol>
  * <li>Create and fill the emissary.pool.AgentPool</li>
- * <li>Create the emissary.pool.MoveSpool</li>
  * <li>Initialize the Charset conversion subsystem</li>
  * <li>Initialize the Metadata Dictionary subsystem</li>
  * <li>Deploy any places configure to run on this instance This is determined by looking for an appropriate config file

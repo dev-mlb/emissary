@@ -9,7 +9,6 @@ import emissary.directory.EmissaryNode;
 import emissary.directory.IDirectoryPlace;
 import emissary.place.IServiceProviderPlace;
 import emissary.pool.AgentPool;
-import emissary.pool.MoveSpool;
 import emissary.server.EmissaryServer;
 
 import org.eclipse.jetty.server.Server;
@@ -30,7 +29,6 @@ public abstract class FunctionalTest extends UnitTest {
     protected Server jetty = null;
     protected IDirectoryPlace directory = null;
     protected AgentPool pool = null;
-    protected MoveSpool spool = null;
 
     public FunctionalTest() {
         super();
@@ -115,11 +113,6 @@ public abstract class FunctionalTest extends UnitTest {
             pool = AgentPool.lookup();
         } catch (NamespaceException ex) {
             logger.warn("Agent pool is missing");
-        }
-        try {
-            spool = MoveSpool.lookup();
-        } catch (NamespaceException ex) {
-            logger.warn("Move spool is missing");
         }
     }
 

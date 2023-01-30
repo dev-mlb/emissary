@@ -13,7 +13,7 @@ import java.util.Set;
 import javax.annotation.Nullable;
 
 /**
- * A hybrid of the MultiFileServerPlace and the FilePickupPlace. Knows how to sprout agents using the MoveSpool
+ * A hybrid of the MultiFileServerPlace and the FilePickupPlace.
  */
 public abstract class MultiFileServerPlace extends PickUpPlace implements IMultiFileServerPlace {
     protected TypeEngine typeEngine;

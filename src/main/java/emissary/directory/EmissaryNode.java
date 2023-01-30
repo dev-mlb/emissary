@@ -9,7 +9,6 @@ import emissary.core.MetricsManager;
 import emissary.core.ResourceWatcher;
 import emissary.pool.AgentPool;
 import emissary.pool.MobileAgentFactory;
-import emissary.pool.MoveSpool;
 import emissary.roll.RollManager;
 import emissary.spi.SPILoader;
 
@@ -229,10 +228,6 @@ public class EmissaryNode {
         // The AgentPool
         AgentPool pool = new AgentPool(new MobileAgentFactory());
         logger.debug("Setup AgentPool with " + pool.getNumIdle() + " agents...");
-
-        // The MoveSpool
-        MoveSpool spool = new MoveSpool();
-        logger.debug("Started MoveSpool..." + spool.toString());
 
         // The metrics manager
         MetricsManager metricsManager = new MetricsManager();
