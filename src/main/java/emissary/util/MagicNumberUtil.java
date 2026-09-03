@@ -30,10 +30,11 @@ import java.util.TreeMap;
  * occurrences is &gt; 1, then not preceded by '0' 3. Hex: 0xn* 4. Octal: 0n* 5. Offset values in the format '(n.s+32)'
  * are ignored. These only occurred in the continuations
  *
- * C. Data Type Column 1. BYTE, SHORT, LONG, STRING, BESHORT, BELONG, LESHORT, LELONG 2. LEDATE, BEDATE, and DATE are
- * not supported 3. Masking: If the data type is followed by a mask value in decimal, octal or hex and delimited by
- * '&amp;' then the value column will be stored as the product of the masking. The mask value cannot exceed the data
- * type length.
+ * C. Data Type Column 1. BYTE, SHORT, LONG, STRING, BESHORT, BELONG, LESHORT, LELONG 2. Unsigned prefixes (ubelong) and
+ * 4-byte date spellings (date, bedate, ledate and their localtime variants) are aliased onto their numeric equivalents
+ * (LONG/LELONG); 8-byte quad types remain unsupported 3. Masking: If the data type is followed by a mask value in
+ * decimal, octal or hex and delimited by '&amp;' then the value column will be stored as the product of the masking.
+ * The mask value cannot exceed the data type length.
  *
  * D. Value columns 1. String, Byte, Short, or Long - 1, 2, or 4 byte values - or any length value for the string type.
  * 2. String values can be escaped. a. Example "\0\40\320\3200\4text\ \7\x40\r\t\" parsed as: "0-32-208-208-0-4-text-

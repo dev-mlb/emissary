@@ -220,9 +220,11 @@ public class MagicNumberFactory {
         MagicDataType dataType;
         int dataTypeLength;
         byte[] mask;
+        boolean unsigned;
         try {
             dataType = resolveDataType(columns);
             dataTypeLength = dataType.getFixedByteLength();
+            unsigned = isUnsignedTypeName(columns[1]);
             mask = resolveMask(columns, dataTypeLength);
         } catch (Exception e) {
             if (swallowParseException) {
@@ -239,7 +241,7 @@ public class MagicNumberFactory {
         boolean substitute;
         try {
             unaryOperator = resolveUnary(columns, dataType);
-            value = resolveValue(columns, dataType, dataTypeLength);
+            value = resolveValue(columns, dataType, dataTypeLength, unsigned);
             substitute = isAnyValuePlaceholder(columns[2]);
 
             if (dataType == MagicDataType.STRING && value != null) {
@@ -249,7 +251,7 @@ public class MagicNumberFactory {
             throw new ParseException("Error on column 2:" + columns[2] + ". " + e.getMessage());
         }
 
-        return new MagicNumber(depth, offset, offsetUnary, dataType, dataTypeLength, mask, unaryOperator, value,
+        return new MagicNumber(depth, offset, offsetUnary, dataType, dataTypeLength, mask, unsigned, unaryOperator, value,
                 substitute, columns[3]);
     }
 
@@ -362,16 +364,89 @@ public class MagicNumberFactory {
         if (subject.equals("regex")) {
             throw new ParseException(UNSUPPORTED_DATATYPE_MSG_REGEX);
         }
-        if (subject.charAt(0) == 'u' || subject.charAt(0) == 'U') {
-            throw new ParseException(UNSUPPORTED_DATATYPE_MSG_UNSIGNED);
-        }
 
         int ix = subject.indexOf("&") > 0 ? subject.indexOf("&") : subject.indexOf("/");
-        String typeName = ix > 0 ? columns[1].substring(0, ix) : subject;
+        String typeName = ix > 0 ? subject.substring(0, ix) : subject;
+        String upperTypeName = typeName.toUpperCase(Locale.getDefault());
+        boolean unsigned = upperTypeName.charAt(0) == 'U';
 
-        return MagicDataType.fromKey(typeName)
+        // An unsigned spelling (u* name) describes the same width and byte order as its signed counterpart, so it
+        // resolves to the type named after the "u". A rule that carries the "u" but names a type we can't resolve (like
+        // uquad) is an unsupported unsigned type rather than an ordinary unknown type.
+        if (unsigned && alignUnsignedSpelling(upperTypeName) == null) {
+            throw new ParseException(UNSUPPORTED_DATATYPE_MSG_UNSIGNED);
+        }
+        String baseTypeName = unsigned ? upperTypeName.substring(1) : upperTypeName;
+        String canonicalName = canonicalTypeName(baseTypeName);
+
+        return MagicDataType.fromKey(canonicalName)
                 .filter(MagicDataType::isSupported)
                 .orElseThrow(() -> new ParseException("Unsupported Data Type: " + typeName));
+    }
+
+    /**
+     * True when the given raw type name is one of the unsigned spellings (it starts with {@code u} and names a type we
+     * understand), such as {@code ubelong} or {@code udate}. Masks and other suffixes are stripped before checking.
+     *
+     * @param rawTypeName the type column from the configuration line
+     * @return true if this is a known unsigned type
+     */
+    private static boolean isUnsignedTypeName(String rawTypeName) {
+        int ix = rawTypeName.indexOf("&") > 0 ? rawTypeName.indexOf("&") : rawTypeName.indexOf("/");
+        String typeName = ix > 0 ? rawTypeName.substring(0, ix) : rawTypeName;
+        String upperTypeName = typeName.toUpperCase(Locale.getDefault());
+        return alignUnsignedSpelling(upperTypeName) != null;
+    }
+
+    /**
+     * Maps a date type name to the integer type that stores a date the same way. A date in these rules is just a count of
+     * seconds, so it is evaluated exactly like a plain 4-byte integer.
+     *
+     * @param upperTypeName the upper-cased type name (without any unsigned {@code u} prefix)
+     * @return the equivalent integer type name, or the input unchanged if it isn't a date
+     */
+    private static String canonicalTypeName(String upperTypeName) {
+        switch (upperTypeName) {
+            case "DATE":
+            case "LDATE":
+            case "BEDATE":
+            case "BELDATE":
+                return "LONG";
+            case "LEDATE":
+            case "LELDATE":
+                return "LELONG";
+            default:
+                return upperTypeName;
+        }
+    }
+
+    /**
+     * Confirms a {@code u}-prefixed name refers to a type we support. Returns the canonical name when it does, or null when
+     * it does not.
+     *
+     * @param upperTypeName the upper-cased unsigned type name
+     * @return the canonical name, or null if it isn't a supported unsigned type
+     */
+    @Nullable
+    private static String alignUnsignedSpelling(String upperTypeName) {
+        switch (upperTypeName) {
+            case "UBYTE":
+            case "USHORT":
+            case "ULONG":
+            case "UBESHORT":
+            case "UBELONG":
+            case "ULESHORT":
+            case "ULELONG":
+            case "UDATE":
+            case "ULDATE":
+            case "UBEDATE":
+            case "UBELDATE":
+            case "ULEDATE":
+            case "ULELDATE":
+                return upperTypeName;
+            default:
+                return null;
+        }
     }
 
     @Nullable
@@ -384,7 +459,8 @@ public class MagicNumberFactory {
         return null;
     }
 
-    private static byte[] resolveValue(String[] columns, MagicDataType dataType, int dataTypeLength) {
+    private static byte[] resolveValue(String[] columns, MagicDataType dataType, int dataTypeLength, boolean unsigned)
+            throws ParseException {
         String subject = columns[2];
 
         if (dataType == MagicDataType.STRING && !isAnyValuePlaceholder(subject)) {
@@ -400,8 +476,15 @@ public class MagicNumberFactory {
         if (subject.toUpperCase(Locale.ROOT).endsWith("L")) {
             subject = subject.substring(0, subject.length() - 1);
         }
-        byte[] valueArray = MagicMath.stringToByteArray(subject);
-        valueArray = MagicMath.setLength(valueArray, dataTypeLength);
+        byte[] valueArray;
+        if (!unsigned && isNegativeLiteral(subject)) {
+            valueArray = MagicMath.integerToByteArray(dataTypeLength, MagicMath.stringToLong(subject));
+        } else {
+            if (unsigned && isNegativeLiteral(subject)) {
+                throw new ParseException("Negative value not allowed for an unsigned type: " + subject);
+            }
+            valueArray = MagicMath.setLength(MagicMath.stringToByteArray(subject), dataTypeLength);
+        }
 
         if (dataType == MagicDataType.LELONG) {
             MagicMath.longEndianSwap(valueArray, 0);
@@ -409,6 +492,10 @@ public class MagicNumberFactory {
             MagicMath.shortEndianSwap(valueArray, 0);
         }
         return valueArray;
+    }
+
+    private static boolean isNegativeLiteral(String subject) {
+        return !subject.isEmpty() && subject.charAt(0) == '-';
     }
 
     private static boolean isAnyValuePlaceholder(String subject) {

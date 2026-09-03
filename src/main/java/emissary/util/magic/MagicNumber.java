@@ -138,6 +138,7 @@ public class MagicNumber {
     private final int dataTypeLength;
     @Nullable
     private final byte[] mask;
+    private final boolean unsigned;
 
     // Column C Properties
     private final char unaryOperator;
@@ -160,6 +161,7 @@ public class MagicNumber {
      * @param dataType the data type being checked (from column B)
      * @param dataTypeLength how many bytes this rule tests
      * @param mask optional bit mask applied before testing
+     * @param unsigned true if numbers are compared as unsigned (the u-prefixed types), false for signed
      * @param unaryOperator the comparison sign (from column C)
      * @param value the expected value to check against (from column C)
      * @param substitute true if column C uses the wildcard 'x' to match anything and insert live values into the
@@ -167,13 +169,14 @@ public class MagicNumber {
      * @param description the description text (from column D)
      */
     MagicNumber(int depth, int offset, char offsetUnary, MagicDataType dataType, int dataTypeLength, @Nullable byte[] mask,
-            char unaryOperator, @Nullable byte[] value, boolean substitute, @Nullable String description) {
+            boolean unsigned, char unaryOperator, @Nullable byte[] value, boolean substitute, @Nullable String description) {
         this.depth = depth;
         this.offset = offset;
         this.offsetUnary = offsetUnary;
         this.dataType = dataType;
         this.dataTypeLength = dataTypeLength;
         this.mask = mask;
+        this.unsigned = unsigned;
         this.unaryOperator = unaryOperator;
         this.value = value;
         this.substitute = substitute;
@@ -182,6 +185,10 @@ public class MagicNumber {
 
     public boolean isSubstitute() {
         return substitute;
+    }
+
+    public boolean isUnsigned() {
+        return unsigned;
     }
 
     /**
@@ -289,7 +296,8 @@ public class MagicNumber {
 
                     byte[] subData = extractElement(data, offset, dataTypeLength);
                     if (subData != null) {
-                        String sub = MagicMath.byteArrayToString(subData, 10);
+                        String sub = unsigned ? MagicMath.byteArrayToString(subData, 10)
+                                : String.valueOf(readSignedValue(subData, dataType.isBigEndian()));
                         sb.append(sub);
                     }
                 }
@@ -363,7 +371,7 @@ public class MagicNumber {
         }
 
         log.debug("Unary Operator: {}", unaryOperator);
-        return MatchOperator.forSymbol(unaryOperator).matches(subject, value, dataType.isBigEndian());
+        return MatchOperator.forSymbol(unaryOperator).matches(subject, value, dataType.isBigEndian(), unsigned);
     }
 
     private void applyMask(byte[] subject) {
@@ -389,6 +397,33 @@ public class MagicNumber {
         byte[] subject = new byte[length];
         System.arraycopy(data, offset, subject, 0, subject.length);
         return subject;
+    }
+
+    /**
+     * Reads a chunk of bytes as a signed number. The bytes are treated as a two's-complement integer of the given
+     * endianness, so a high bit set on the most significant byte produces a negative value.
+     *
+     * @param data the raw bytes (big-endian if {@code bigEndian} is true, little-endian otherwise)
+     * @param bigEndian true to read the most significant byte first
+     * @return the signed integer value of the byte chunk
+     */
+    private static long readSignedValue(byte[] data, boolean bigEndian) {
+        long value = 0;
+        if (bigEndian) {
+            for (byte b : data) {
+                value = (value << 8) | (b & 0xFFL);
+            }
+        } else {
+            for (int i = data.length - 1; i >= 0; i--) {
+                value = (value << 8) | (data[i] & 0xFFL);
+            }
+        }
+        return toSigned(value, data.length);
+    }
+
+    private static long toSigned(long value, int byteCount) {
+        int bits = byteCount * 8;
+        return (value & (1L << bits) - 1) | (((value & (1L << (bits - 1))) != 0) ? ~((1L << bits) - 1) : 0);
     }
 
     /**
@@ -479,7 +514,7 @@ public class MagicNumber {
             }
         }
 
-        boolean matches(byte[] subject, byte[] value, boolean mostSignificantByteFirst) {
+        boolean matches(byte[] subject, byte[] value, boolean mostSignificantByteFirst, boolean unsigned) {
             switch (this) {
                 case EQUALS:
                     return Arrays.equals(subject, value);
@@ -493,7 +528,7 @@ public class MagicNumber {
                     }
                     return false;
                 default:
-                    int cmp = compare(subject, value, mostSignificantByteFirst);
+                    int cmp = compare(subject, value, mostSignificantByteFirst, unsigned);
                     switch (this) {
                         case GREATER_THAN:
                             return cmp > 0;
@@ -509,19 +544,19 @@ public class MagicNumber {
             }
         }
 
-        private static int compare(byte[] left, byte[] right, boolean mostSignificantByteFirst) {
+        private static int compare(byte[] left, byte[] right, boolean mostSignificantByteFirst, boolean unsigned) {
             if (mostSignificantByteFirst) {
                 for (int i = 0; i < left.length; i++) {
-                    int l = left[i] & 0xFF;
-                    int r = right[i] & 0xFF;
+                    int l = unsigned ? left[i] & 0xFF : left[i];
+                    int r = unsigned ? right[i] & 0xFF : right[i];
                     if (l != r) {
                         return Integer.compare(l, r);
                     }
                 }
             } else {
                 for (int i = left.length - 1; i >= 0; i--) {
-                    int l = left[i] & 0xFF;
-                    int r = right[i] & 0xFF;
+                    int l = unsigned ? left[i] & 0xFF : left[i];
+                    int r = unsigned ? right[i] & 0xFF : right[i];
                     if (l != r) {
                         return Integer.compare(l, r);
                     }

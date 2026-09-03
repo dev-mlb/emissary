@@ -243,57 +243,120 @@ class MagicNumberTest extends UnitTest {
     @Test
     void testGreaterThanByte() throws ParseException {
         MagicNumber m = MagicNumberFactory.buildMagicNumber("0 byte >0x09 FOO");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "Greater than magic operator failed");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "byte>0x09 is a signed comparison, so the high bit negative A1 must not beat 09");
         assertFalse(m.test(DatatypeConverter.parseHexBinary("01")), "Greater than magic operator failed");
         assertFalse(m.test(DatatypeConverter.parseHexBinary("09")), "Greater than magic operator failed");
 
         m = MagicNumberFactory.buildMagicNumber("0 byte >0xF2 FOO");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "Greater than magic operator failed");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("F8")), "Greater than magic operator failed");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("91")), "Greater than magic operator failed");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must not beat F2 (-14)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("F8")), "signed F8 (-8) must beat F2 (-14)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("91")), "signed 91 (-111) must not beat F2 (-14)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("F2")), "Greater than magic operator failed");
+    }
+
+    @Test
+    void testGreaterThanUnsignedByte() throws ParseException {
+        MagicNumber m = MagicNumberFactory.buildMagicNumber("0 ubyte >0x09 FOO");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "ubyte>0x09 is an unsigned comparison, so A1 (161) must beat 09");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("01")), "Greater than magic operator failed");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("09")), "Greater than magic operator failed");
+
+        m = MagicNumberFactory.buildMagicNumber("0 ubyte >0xF2 FOO");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "unsigned A1 (161) must not beat F2 (242)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("F8")), "unsigned F8 (248) must beat F2 (242)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("91")), "unsigned 91 (145) must not beat F2 (242)");
         assertFalse(m.test(DatatypeConverter.parseHexBinary("F2")), "Greater than magic operator failed");
     }
 
     @Test
     void testGreaterEqualByte() throws ParseException {
         MagicNumber m = MagicNumberFactory.buildMagicNumber("0 byte >=0x09 FOO");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "GreaterEqual than magic operator failed");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must not satisfy >=09");
         assertFalse(m.test(DatatypeConverter.parseHexBinary("01")), "GreaterEqual than magic operator failed");
         assertTrue(m.test(DatatypeConverter.parseHexBinary("09")), "GreaterEqual than magic operator failed");
 
         m = MagicNumberFactory.buildMagicNumber("0 byte >=0xF2 FOO");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "GreaterEqual than magic operator failed");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("F8")), "GreaterEqual than magic operator failed");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("91")), "GreaterEqual than magic operator failed");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must not beat F2 (-14)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("F8")), "signed F8 (-8) must beat F2 (-14)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("91")), "signed 91 (-111) must not beat F2 (-14)");
         assertTrue(m.test(DatatypeConverter.parseHexBinary("F2")), "GreaterEqual than magic operator failed");
     }
 
     @Test
     void testLessThanByte() throws ParseException {
         MagicNumber m = MagicNumberFactory.buildMagicNumber("0 byte <0x09 FOO");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "Less than magic operator failed");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must be less than 09");
         assertTrue(m.test(DatatypeConverter.parseHexBinary("01")), "Less than magic operator failed");
         assertFalse(m.test(DatatypeConverter.parseHexBinary("09")), "Less than magic operator failed");
 
         m = MagicNumberFactory.buildMagicNumber("0 byte <0xF2 FOO");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "Less than magic operator failed");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("F8")), "Less than magic operator failed");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("91")), "Less than magic operator failed");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must be less than F2 (-14)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("F8")), "signed F8 (-8) must not be less than F2 (-14)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("91")), "signed 91 (-111) must be less than F2 (-14)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("F2")), "Less than magic operator failed");
+    }
+
+    @Test
+    void testLessThanUnsignedByte() throws ParseException {
+        MagicNumber m = MagicNumberFactory.buildMagicNumber("0 ubyte <0x09 FOO");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "unsigned A1 (161) must not be less than 09");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("01")), "Less than magic operator failed");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("09")), "Less than magic operator failed");
+
+        m = MagicNumberFactory.buildMagicNumber("0 ubyte <0xF2 FOO");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "unsigned A1 (161) must be less than F2 (242)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("F8")), "unsigned F8 (248) must not be less than F2 (242)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("91")), "unsigned 91 (145) must be less than F2 (242)");
         assertFalse(m.test(DatatypeConverter.parseHexBinary("F2")), "Less than magic operator failed");
     }
 
     @Test
     void testLessEqualByte() throws ParseException {
         MagicNumber m = MagicNumberFactory.buildMagicNumber("0 byte <=0x09 FOO");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "LessEqual than magic operator failed");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must be <=09");
         assertTrue(m.test(DatatypeConverter.parseHexBinary("01")), "LessEqual than magic operator failed");
         assertTrue(m.test(DatatypeConverter.parseHexBinary("09")), "LessEqual than magic operator failed");
 
         m = MagicNumberFactory.buildMagicNumber("0 byte <=0xF2 FOO");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "LessEqual than magic operator failed");
-        assertFalse(m.test(DatatypeConverter.parseHexBinary("F8")), "LessEqual than magic operator failed");
-        assertTrue(m.test(DatatypeConverter.parseHexBinary("91")), "LessEqual than magic operator failed");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "signed A1 (-95) must be <=F2 (-14)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("F8")), "signed F8 (-8) must not be <=F2 (-14)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("91")), "signed 91 (-111) must be <=F2 (-14)");
         assertTrue(m.test(DatatypeConverter.parseHexBinary("F2")), "LessEqual than magic operator failed");
+    }
+
+    @Test
+    void testLessEqualUnsignedByte() throws ParseException {
+        MagicNumber m = MagicNumberFactory.buildMagicNumber("0 ubyte <=0x09 FOO");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("A1")), "unsigned A1 (161) must not be <=09");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("01")), "LessEqual than magic operator failed");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("09")), "LessEqual than magic operator failed");
+
+        m = MagicNumberFactory.buildMagicNumber("0 ubyte <=0xF2 FOO");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("A1")), "unsigned A1 (161) must be <=F2 (242)");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("F8")), "unsigned F8 (248) must not be <=F2 (242)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("91")), "unsigned 91 (145) must be <=F2 (242)");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("F2")), "LessEqual than magic operator failed");
+    }
+
+    @Test
+    void testSignedVsUnsignedByte() throws ParseException {
+        MagicNumber signed = MagicNumberFactory.buildMagicNumber("0 byte >0 FOO");
+        assertFalse(signed.test(DatatypeConverter.parseHexBinary("FF")), "signed FF is -1, which is not greater than zero");
+
+        MagicNumber unsigned = MagicNumberFactory.buildMagicNumber("0 ubyte >0 FOO");
+        assertTrue(unsigned.test(DatatypeConverter.parseHexBinary("FF")), "unsigned FF is 255, which is greater than zero");
+    }
+
+    @Test
+    void testSignedNegativeLiteral() throws ParseException {
+        MagicNumber m = MagicNumberFactory.buildMagicNumber("0 byte >-2 FOO");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("FE")), "-2 is not greater than -2");
+        assertFalse(m.test(DatatypeConverter.parseHexBinary("FD")), "-3 is not greater than -2");
+        assertTrue(m.test(DatatypeConverter.parseHexBinary("FF")), "-1 is greater than -2");
+
+        MagicNumber eq = MagicNumberFactory.buildMagicNumber("0 byte -2 FOO");
+        assertTrue(eq.test(DatatypeConverter.parseHexBinary("FE")), "-2 must equal the byte 0xFE");
+        assertFalse(eq.test(DatatypeConverter.parseHexBinary("FF")), "-1 must not equal -2");
     }
 
 }

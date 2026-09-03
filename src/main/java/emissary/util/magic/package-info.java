@@ -90,14 +90,16 @@
  * <tr>
  * <td>Unsigned number types</td>
  * <td>Yes</td>
- * <td><b>Rejected</b> ("Signed Data Types unsupported"); values are treated as unsigned anyway</td>
+ * <td>Yes, the {@code u} prefix (like {@code ubelong}) selects unsigned comparison for the same width and byte
+ * order</td>
  * <td>{@code ubelong&0x000f0000}</td>
  * </tr>
  * <tr>
  * <td>Date and time types</td>
  * <td>Yes</td>
- * <td><b>Rejected</b></td>
- * <td>{@code bedate-0x7C25B080}</td>
+ * <td>Yes for 4-byte types, compared as integers (no calendar rendering); signed dates default, {@code u}-prefixed
+ * dates are unsigned; 8-byte quad dates rejected</td>
+ * <td>{@code >4 bedate x}</td>
  * </tr>
  * <tr>
  * <td>Large numbers and decimals (quad, float, double)</td>
@@ -148,7 +150,7 @@
  * <tr>
  * <td>Comparison signs ({@code = ! > < >= <=})</td>
  * <td>Signed comparisons</td>
- * <td>Unsigned comparisons</td>
+ * <td>Signed for plain types, unsigned when a {@code u} prefix is used</td>
  * <td>{@code beshort >=0x0301}</td>
  * </tr>
  * <tr>
@@ -172,7 +174,7 @@
  * <tr>
  * <td>Negative numbers</td>
  * <td>Yes</td>
- * <td>No, treated as raw bit patterns</td>
+ * <td>Yes for signed types; rejected for unsigned types</td>
  * <td>{@code byte >-2}</td>
  * </tr>
  * <tr>
@@ -188,7 +190,8 @@
  * <tr>
  * <td>Numeric placeholders ({@code %d %ld})</td>
  * <td>Standard formatting</td>
- * <td>Inserts the decimal value of the read bytes</td>
+ * <td>Inserts the decimal value of the read bytes (signed values for plain types, unsigned for {@code u}-prefixed
+ * types)</td>
  * <td>{@code version %d.%ld}</td>
  * </tr>
  * <tr>
@@ -242,9 +245,10 @@
  *   &gt;4   beshort  x                       \b, version %d        - pulls value into description text
  *   0   belong&amp;0xffffff00        0xffd8ff00      JPEG image data          - uses bit masks for checks
  *   &gt;0   byte&amp;0x1F                0x07            \b, LZMA compressed      - checks masked nibble values
+ *   0   ubelong  &amp;0x000f0000     0x000e0000      Mach-O universal binary    - unsigned spelling, compared without a sign
+ *   &gt;4   bedate   x                       created: %s            - date type compared as a plain integer
  *
  * Skipped when error handling is enabled:
- *   0   ubelong  &amp;0x000f0000     0x000e0000      Mach-O universal binary    - unsigned numbers
  *   &gt;&amp;32 search/256 self                \b, contains embedded zip   - bounded text search
  *   0   regex   ^#!.*python    Python script               - regular expressions
  *   0   lequad  x                       Little-endian 64-bit        - large 8-byte numbers
