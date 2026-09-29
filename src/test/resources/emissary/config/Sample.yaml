@@ -1,0 +1,69 @@
+# Sample YAML (.yaml/.yml) emissary configuration.
+#
+# Mapping to the legacy .cfg format:
+#   KEY: value            <=>  KEY = value
+#   KEY: [a, b]           <=>  KEY = a  +  KEY = b   (repeated entries, order preserved)
+#   NESTED: {ONE: AAA}    <=>  NESTED_ONE = AAA      (nested maps flatten with '_',
+#                                                     matching findStringMatchMap("NESTED_"))
+#   "@{VAR}" strings      <=>  same @{VAR} substitution as .cfg (applied to keys and values)
+#
+# Operators (quote the key: a bare ! starts a YAML tag):
+#   "!remove": {KEY: val}     <=>  KEY != val        (value "*" removes all entries for KEY)
+#   KEY: [{...}, {"!remove": v}, ...]  <=>  positional removal inside a sequence,
+#                                            evaluated in order (e.g. add, remove, re-add)
+#   "!import": file.yaml      <=>  IMPORT_FILE = file.yaml
+#   "!opt-import": [a, b]     <=>  OPT_IMPORT_FILE entries (missing files are silent)
+#   "!flavor-NAME": {...}     <=>  inline flavor overrides, applied only when NAME is an
+#                                  active config flavor (like base-NAME.yaml, but in one file).
+#                                  "!flavor": {NAME: {...}} is an equivalent grouped form.
+#                                  Flavor entries win findStringEntry, matching file flavor merges.
+#                                  Inactive flavor sections are skipped entirely.
+#
+# Gotchas:
+#   - Quote anything that must stay a string: YAML coerces unquoted scalars, so
+#       YES_WORD: "yes"     stays "yes"     (unquoted yes/no/on/off become true/false)
+#       HEX_ID: "0xFF"       stays "0xFF"     (unquoted 0xFF becomes 255)
+#       VERSION: "07"        stays "07"       (unquoted 07 becomes 7)
+#     Legacy .cfg kept all of these as literal strings, so quote pasted IDs/versions.
+#   - Unicode escapes are processed twice: YAML resolves them in double-quoted strings
+#     ("A" is already A before the config reader sees it), while single-quoted
+#     '\u0041' is resolved by the config reader's own \u handling. Prefer double quotes.
+#   - Mapping keys cannot repeat: unlike legacy FOO = a / FOO = b (two entries),
+#     writing FOO twice keeps only the last value (and logs a warning). Use a
+#     sequence (KEY: [a, b]) for multi-valued entries. Start the server with
+#     --strict (or -Dstrict.mode=true) to turn duplicate keys into a startup failure.
+#   - Nested maps flatten with '_', so NESTED: {B_C: x} and a literal NESTED_B_C: y
+#     key collide: both entries are kept (with a warning; --strict fails instead),
+#     lookups return the first while substitution sees the last. Rename one side.
+#   - "!import"/"!remove"/"!flavor-*" only work as top-level keys; nested maps flatten instead.
+#   - Only flat scalars and flat sequences are supported; nested collections throw.
+
+PLACE_NAME: SamplePlace
+SERVICE_NAME: SAMPLE_PLACE
+SERVICE_TYPE: INITIAL
+SERVICE_COST: 50
+
+# Repeated entries: one list item per config entry, in order.
+RENDEZVOUS_PEER:
+  - "*.*.*.http://@{emissary.node.name}:7001/DirectoryPlace"
+  - "*.*.*.http://@{emissary.node.name}:8001/DirectoryPlace"
+
+# Nested map flattens to MYPROPS_ONE, MYPROPS_TWO.
+MYPROPS:
+  ONE: AAA
+  TWO: BBB
+
+# "@{BASE} world" => substitution still applies.
+BASE: hello
+GREETING: "@{BASE} world"
+
+"!import": emissary.config.TestYamlClasspath.yaml
+"!opt-import":
+  - no-such-optional-file.yaml
+
+"!remove":
+  UNWANTED: "*"
+
+# Inline flavor override: active only with -Demissary.config.flavor=MYFLAVOR.
+"!flavor-MYFLAVOR":
+  SERVICE_COST: 10

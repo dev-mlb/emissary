@@ -6,7 +6,6 @@ import emissary.client.response.ConfigsResponseEntity;
 import emissary.config.ConfigEntry;
 import emissary.config.ConfigUtil;
 import emissary.config.Configurator;
-import emissary.config.ServiceConfigGuide;
 
 import com.google.common.collect.Lists;
 import jakarta.ws.rs.GET;
@@ -104,7 +103,7 @@ public class Configs {
 
         // default config
         detailed.addConfig(new Config(Collections.emptyList(), Collections.singletonList(cfg),
-                normalizeEntries(new ServiceConfigGuide(ConfigUtil.getConfigStream(cfg), cfg))));
+                normalizeEntries(ConfigUtil.getBaseConfigInfo(cfg))));
 
         // flavored configs
         String[] flavoredCfgs = ConfigUtil.addFlavors(cfg);
@@ -129,7 +128,11 @@ public class Configs {
         if (!VALID_CONFIG_NAME.matcher(config).matches() || config.contains("..") || config.endsWith(".")) {
             throw new IllegalArgumentException("Invalid config name: " + config);
         }
-        return Strings.CS.appendIfMissing(config.trim(), CONFIG_FILE_ENDING);
+        final String trimmed = config.trim();
+        if (ConfigUtil.configFileSuffix(trimmed) != null) {
+            return trimmed;
+        }
+        return Strings.CS.appendIfMissing(trimmed, CONFIG_FILE_ENDING);
     }
 
     /**

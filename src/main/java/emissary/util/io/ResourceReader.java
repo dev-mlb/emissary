@@ -25,6 +25,8 @@ public class ResourceReader {
     private static final Logger logger = LoggerFactory.getLogger(ResourceReader.class);
 
     public static final String CONFIG_SUFFIX = ".cfg";
+    public static final String YAML_SUFFIX = ".yaml";
+    public static final String YML_SUFFIX = ".yml";
     public static final String XML_SUFFIX = ".xml";
     public static final String DATA_SUFFIX = ".dat";
     public static final String JS_SUFFIX = ".js";
@@ -47,12 +49,18 @@ public class ResourceReader {
 
     /**
      * Return the config stream for the class config file Caller must close the stream
-     * 
+     *
      * @param c the class name matching the desired resource
      */
+    @Nullable
     public InputStream getConfigDataAsStream(Class<?> c) {
-        String name = getConfigDataName(c);
-        return getResourceAsStream(name);
+        for (final String name : getConfigDataNames(c)) {
+            final InputStream is = getResourceAsStream(name);
+            if (is != null) {
+                return is;
+            }
+        }
+        return null;
     }
 
     /**
@@ -60,6 +68,21 @@ public class ResourceReader {
      */
     public String getConfigDataName(Class<?> c) {
         return getResourceName(c) + CONFIG_SUFFIX;
+    }
+
+    /**
+     * Config resource names for the class
+     *
+     * @param c the class
+     * @return list of {@code .cfg} first then {@code .yaml} and {@code .yml}
+     */
+    public List<String> getConfigDataNames(Class<?> c) {
+        final String base = getResourceName(c);
+        final List<String> names = new ArrayList<>();
+        names.add(base + CONFIG_SUFFIX);
+        names.add(base + YAML_SUFFIX);
+        names.add(base + YML_SUFFIX);
+        return names;
     }
 
     /**
@@ -156,12 +179,17 @@ public class ResourceReader {
 
     /**
      * Find all the config resources present for the specified class
-     * 
+     *
      * @param c the class
      * @return sorted list of resources found or an empty list if none
      */
     public List<String> findConfigResourcesFor(Class<?> c) {
-        return findResourcesFor(c, CONFIG_SUFFIX);
+        final List<String> results = new ArrayList<>();
+        results.addAll(findResourcesFor(c, CONFIG_SUFFIX));
+        results.addAll(findResourcesFor(c, YAML_SUFFIX));
+        results.addAll(findResourcesFor(c, YML_SUFFIX));
+        Collections.sort(results);
+        return results;
     }
 
     /**

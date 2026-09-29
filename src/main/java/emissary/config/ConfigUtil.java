@@ -16,6 +16,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
@@ -34,6 +35,9 @@ public class ConfigUtil {
 
     /** Constant string for files that end with {@value} */
     public static final String CONFIG_FILE_ENDING = ResourceReader.CONFIG_SUFFIX;
+
+    /** Constant string for files that end with "yaml or yml" */
+    public static final List<String> YAML_FILE_ENDINGS = List.of(ResourceReader.YAML_SUFFIX, ResourceReader.YML_SUFFIX);
 
     /** Constant string for files that end with {@value} */
     public static final String PROP_FILE_ENDING = ResourceReader.PROP_SUFFIX;
@@ -73,6 +77,9 @@ public class ConfigUtil {
      * This property is the OUTPUT_ROOT, the root directory of local output
      */
     public static final String CONFIG_OUTPUT_ROOT_PROPERTY = "emissary.output.root";
+
+    /** When true, config warnings fail the load instead. Set by the {@code --strict} server flag. */
+    public static final String STRICT_MODE_PROPERTY = "strict.mode";
 
     public static final String PROJECT_BASE_ENV = "PROJECT_BASE";
 
@@ -272,9 +279,12 @@ public class ConfigUtil {
      */
     private static String getOldStyleConfigFile(final String name) {
         String file = name;
+        String suffix = CONFIG_FILE_ENDING;
         // Chomp the file suffix
-        if (file.endsWith(CONFIG_FILE_ENDING)) {
-            file = file.substring(0, file.length() - CONFIG_FILE_ENDING.length());
+        final String requested = configFileSuffix(file);
+        if (requested != null) {
+            file = file.substring(0, file.length() - requested.length());
+            suffix = requested;
         }
 
         if (file.contains("$")) {
@@ -283,16 +293,20 @@ public class ConfigUtil {
         if (file.contains(".")) {
             file = file.substring(file.lastIndexOf(".") + 1);
         }
-        return getConfigFile(file + CONFIG_FILE_ENDING);
+        return getConfigFile(file + suffix);
     }
 
     /**
      * Get the ServiceConfigGuide for the named class
      */
     public static Configurator getConfigInfo(final Class<?> c) throws IOException {
-        final String name = c.getName() + CONFIG_FILE_ENDING;
-        logger.debug("Loading config for (class) {}", name);
-        return getConfigInfo(getConfigStream(name), name);
+        final String base = c.getName();
+        final List<String> prefs = new ArrayList<>();
+        prefs.add(base + CONFIG_FILE_ENDING);
+        for (final String yamlEnding : YAML_FILE_ENDINGS) {
+            prefs.add(base + yamlEnding);
+        }
+        return getConfigInfo(prefs);
     }
 
     /**
@@ -344,7 +358,14 @@ public class ConfigUtil {
      */
     public static Configurator getConfigInfo(final String name) throws IOException {
         logger.debug("Loading config for (string) {}", name);
-        return getConfigInfo(getConfigStream(name), name);
+        for (final String candidate : candidateNames(name)) {
+            final InputStream stream = getCandidateConfigStream(candidate);
+            if (stream != null) {
+                // Parse errors are real failures; don't fall through to the next candidate.
+                return getConfigInfo(stream, candidate);
+            }
+        }
+        throw new IOException("No config stream available for " + name);
     }
 
     /**
@@ -382,6 +403,24 @@ public class ConfigUtil {
     }
 
     /**
+     * Base Configurator for the named object.
+     *
+     * @param name object name to get config info for
+     * @return configurator object
+     */
+    public static Configurator getBaseConfigInfo(final String name) throws IOException {
+        logger.debug("Loading base config for (string) {}", name);
+        for (final String candidate : candidateNames(name)) {
+            final InputStream stream = getCandidateConfigStream(candidate);
+            if (stream != null) {
+                // Parse errors are real failures; don't fall through to the next candidate.
+                return new ServiceConfigGuide(stream, candidate);
+            }
+        }
+        throw new IOException("No config stream available for " + name);
+    }
+
+    /**
      * Get the last modified time of a config file resource
      *
      * @param name the name of the config resource
@@ -403,6 +442,51 @@ public class ConfigUtil {
      * @return an InputStream caller must close
      */
     public static InputStream getConfigStream(final String name) throws IOException {
+        for (final String candidate : candidateNames(name)) {
+            try {
+                return getConfigStreamExact(candidate);
+            } catch (IOException ignored) {
+                // try the next candidate
+            }
+        }
+        throw new IOException("No config stream available for " + name);
+    }
+
+    /**
+     * Lookup candidates for a config name
+     *
+     * @param name the name of the config to look for
+     * @return a list of candidate names
+     */
+    public static List<String> candidateNames(final String name) {
+        final List<String> candidates = new ArrayList<>();
+        candidates.add(name);
+        if (name.endsWith(CONFIG_FILE_ENDING)) {
+            final String base = name.substring(0, name.length() - CONFIG_FILE_ENDING.length());
+            for (final String yamlEnding : YAML_FILE_ENDINGS) {
+                candidates.add(base + yamlEnding);
+            }
+        }
+        return candidates;
+    }
+
+    /**
+     * Open one candidate config stream, returning null instead of throwing when it does not resolve.
+     *
+     * @param candidate the candidate config name
+     * @return the stream, or null when unavailable
+     */
+    @Nullable
+    protected static InputStream getCandidateConfigStream(final String candidate) {
+        try {
+            return getConfigStreamExact(candidate);
+        } catch (IOException e) {
+            logger.debug("No config stream for candidate {}", candidate);
+            return null;
+        }
+    }
+
+    static InputStream getConfigStreamExact(final String name) throws IOException {
         // Try the new style override name first ( with package )
         String sname = getConfigFile(name);
         File f = new File(sname);
@@ -454,6 +538,10 @@ public class ConfigUtil {
         String r = name.replace('.', '/');
         if (r.toUpperCase(Locale.getDefault()).endsWith("/CFG")) {
             r = r.substring(0, r.length() - CONFIG_FILE_ENDING.length()) + CONFIG_FILE_ENDING;
+        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/YAML")) {
+            r = r.substring(0, r.length() - ResourceReader.YAML_SUFFIX.length()) + ResourceReader.YAML_SUFFIX;
+        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/YML")) {
+            r = r.substring(0, r.length() - ResourceReader.YML_SUFFIX.length()) + ResourceReader.YML_SUFFIX;
         } else if (r.toUpperCase(Locale.getDefault()).endsWith("/XML")) {
             r = r.substring(0, r.length() - XML_FILE_ENDING.length()) + XML_FILE_ENDING;
         } else if (r.toUpperCase(Locale.getDefault()).endsWith("/PROPERTIES")) {
@@ -510,6 +598,34 @@ public class ConfigUtil {
     }
 
     /**
+     * Active config flavors as a set
+     *
+     * @return a set of config flavors, empty if no flavors
+     */
+    public static Set<String> getUniqueFlavors() {
+        final Set<String> flavors = new LinkedHashSet<>();
+        if (configFlavors == null) {
+            return flavors;
+        }
+        for (final String flavor : configFlavors.split(",")) {
+            final String trimmed = flavor.trim();
+            if (!trimmed.isEmpty()) {
+                flavors.add(trimmed);
+            }
+        }
+        return flavors;
+    }
+
+    /**
+     * Whether {@code --strict} startup mode is on
+     *
+     * @return true if strict mode, false otherwise
+     */
+    public static boolean isStrictMode() {
+        return Boolean.parseBoolean(System.getProperty(STRICT_MODE_PROPERTY, String.valueOf(false)));
+    }
+
+    /**
      * Add the current config Flavor to the name of the resource passed in. E.g. emissary.pkg.Foo.cfg =&gt;
      * emissary.pkg.Foo-${FLAVOR}.cfg
      *
@@ -553,9 +669,9 @@ public class ConfigUtil {
      * <p>
      * For a single entry in 'emissary.config.dir' or comma separated list of config directories, every file that starts
      * with 'emissary.admin.ClassNameInventory' will be combined into a Configurator. This means files like
-     * 'emissary.admin.ClassNameInventory.cfg', 'emissary.admin.ClassNameInventory-module1.cfg' and
-     * 'emissary.admin.ClassNameInventory-whatever.cfg' will be used. The concept of flavoring no longer applies to the
-     * ClassNameInventory.
+     * 'emissary.admin.ClassNameInventory.cfg', 'emissary.admin.ClassNameInventory-module1.cfg',
+     * 'emissary.admin.ClassNameInventory.yaml' and 'emissary.admin.ClassNameInventory-whatever.yml' will be used. The
+     * concept of flavoring no longer applies to the ClassNameInventory.
      *
      * @return Configurator with all emissary.admin.ClassNameInventory
      * @throws IOException If there is some I/O problem.
@@ -564,7 +680,8 @@ public class ConfigUtil {
     public static Configurator getClassNameInventory() throws IOException, EmissaryException {
         final List<File> classNameInventory = new ArrayList<>();
         for (final String dir : getConfigDirs()) {
-            final File[] files = new File(dir).listFiles((dir1, name) -> name.startsWith(INVENTORY_FILE_PREFIX) && name.endsWith(CONFIG_FILE_ENDING));
+            final File[] files = new File(dir).listFiles(
+                    (dir1, name) -> name.startsWith(INVENTORY_FILE_PREFIX) && isConfigFile(name));
             // sort the files, to put emissary.admin.ClassNameInventory.cfg before emissary.admin.ClassNameInventory-blah.cfg
             if (files != null) {
                 Arrays.sort(files);
@@ -573,7 +690,8 @@ public class ConfigUtil {
         }
         // check to make sure we have at least one
         if (classNameInventory.isEmpty()) {
-            throw new EmissaryException(String.format("No %s%s files found.  No places to start.", INVENTORY_FILE_PREFIX, CONFIG_FILE_ENDING));
+            throw new EmissaryException(String.format("No %s{.cfg,.yaml,.yml} files found.  No places to start.",
+                    INVENTORY_FILE_PREFIX));
         }
 
         ServiceConfigGuide scg = null;
@@ -590,10 +708,10 @@ public class ConfigUtil {
                 }
             }
             if (scg == null) { // first one
-                scg = new ServiceConfigGuide(Files.newInputStream(f.toPath()), "ClassNameInventory");
+                scg = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName());
             } else {
                 final Set<String> existingKeys = scg.entryKeys();
-                final Configurator scgToMerge = new ServiceConfigGuide(Files.newInputStream(f.toPath()), "ClassNameInventory");
+                final Configurator scgToMerge = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName());
                 boolean noErrorsForFile = true;
                 for (final String key : scgToMerge.entryKeys()) {
                     if (existingKeys.contains(key)) {
@@ -612,17 +730,55 @@ public class ConfigUtil {
     }
 
     /**
+     * Whether a filename is a config file
+     *
+     * @param filename the config name to check
+     * @return true for files that end in {@code .cfg}, {@code .yaml}, or {@code .yml}
+     */
+    static boolean isConfigFile(final String filename) {
+        if (filename.endsWith(CONFIG_FILE_ENDING)) {
+            return true;
+        }
+        for (final String yamlEnding : YAML_FILE_ENDINGS) {
+            if (filename.endsWith(yamlEnding)) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * The config suffix of a filename
+     *
+     * @param filename the config name to check
+     * @return ({@code .cfg}, {@code .yaml}, or {@code .yml}), or null if it has none.
+     */
+    @Nullable
+    public static String configFileSuffix(final String filename) {
+        if (filename.endsWith(CONFIG_FILE_ENDING)) {
+            return CONFIG_FILE_ENDING;
+        }
+        for (final String yamlEnding : YAML_FILE_ENDINGS) {
+            if (filename.endsWith(yamlEnding)) {
+                return yamlEnding;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Gets the flavors as specified by the filename.
      * <p>
-     * Returns the portion between the last - and .cfg in the file name
+     * Returns the portion between the last - and the config suffix in the file name
      *
      * @param f The file of interest.
      * @return String with parsed flavor name(s)
      */
     static String getFlavorsFromCfgFile(final File f) {
         final String filename = f.getName();
-        if (!filename.endsWith(".cfg")) {
-            logger.warn("Not a cfg file: {}", filename);
+        final String suffix = configFileSuffix(filename);
+        if (suffix == null) {
+            logger.warn("Not a config file: {}", filename);
             return "";
         }
         final String[] parts = filename.split("-");
@@ -633,7 +789,7 @@ public class ConfigUtil {
         if (parts.length > 2) {
             logger.warn("Filename {} had multiple - characters, using the last to determine the flavor", filename);
         }
-        return parts[parts.length - 1].replaceAll(".cfg", "");
+        return parts[parts.length - 1].substring(0, parts[parts.length - 1].length() - suffix.length());
     }
 
     /**

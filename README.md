@@ -260,6 +260,35 @@ or in offline mode:
 ./emissary config --place emissary.place.sample.ToLowerPlace --offline --detailed
 ```
 
+#### YAML configuration (.yaml/.yml)
+
+Places and services can alternatively be configured with YAML files ending in `.yaml` or `.yml`. When a
+`Foo.cfg` is requested but only `Foo.yaml` (or `Foo.yml`) exists (on disk or on the classpath), the YAML file is
+loaded instead; when both exist, the `.cfg` wins. Everything else — flavors, `IMPORT_FILE`,
+`@{VAR}` substitution, and the `config --place` inspection above — works the same.
+
+Mapping to the legacy format:
+
+| YAML | Legacy `.cfg` |
+|---|---|
+| `KEY: value` | `KEY = value` |
+| `KEY: [a, b]` (sequence) | repeated `KEY = a` / `KEY = b` entries, in order |
+| `NESTED: {ONE: x}` | `NESTED_ONE = x` (nested maps flatten with `_`) |
+| `"!remove": {KEY: v}` | `KEY != v` (`"*"` removes all entries) |
+| `KEY: [a, {"!remove": v}, b]` | positional removal inside a sequence, evaluated in order |
+| `"!import": file.yaml` | `IMPORT_FILE = file.yaml` |
+| `"!opt-import": [a, b]` | `OPT_IMPORT_FILE` entries |
+| `"!flavor-NAME": {...}` | inline `base-NAME.cfg` overrides, active only with that flavor |
+
+Notes: 
+- Quote the `!` keys, since a bare `!` starts a YAML tag. 
+- Quote any value that must stay a string: YAML coerces unquoted `yes`/`no`/`on`/`off` to booleans and `0xFF` to `255`,
+where legacy config kept them literal. 
+- Give each mapping key only once — unlike repeated `KEY = ...` lines, a repeated key keeps just the last value (with a 
+  warning); use a  sequence for multi-valued entries. 
+- Starting the server with `--strict` turns duplicate keys and flatten collisions (e.g. `NESTED: {B_C: x}` vs a literal 
+  `NESTED_B_C: y`) into startup failures instead of warnings.
+
 #### Server (Cluster)
 
 Emissary is fun in standalone, but running cluster is more appropriate for real work.  The way to run clustered
