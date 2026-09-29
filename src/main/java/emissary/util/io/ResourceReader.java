@@ -27,6 +27,7 @@ public class ResourceReader {
     public static final String CONFIG_SUFFIX = ".cfg";
     public static final String YAML_SUFFIX = ".yaml";
     public static final String YML_SUFFIX = ".yml";
+    public static final String TOML_SUFFIX = ".toml";
     public static final String XML_SUFFIX = ".xml";
     public static final String DATA_SUFFIX = ".dat";
     public static final String JS_SUFFIX = ".js";
@@ -74,7 +75,7 @@ public class ResourceReader {
      * Config resource names for the class
      *
      * @param c the class
-     * @return list of {@code .cfg} first then {@code .yaml} and {@code .yml}
+     * @return list of {@code .cfg} first, then structured formats
      */
     public List<String> getConfigDataNames(Class<?> c) {
         final String base = getResourceName(c);
@@ -82,6 +83,7 @@ public class ResourceReader {
         names.add(base + CONFIG_SUFFIX);
         names.add(base + YAML_SUFFIX);
         names.add(base + YML_SUFFIX);
+        names.add(base + TOML_SUFFIX);
         return names;
     }
 

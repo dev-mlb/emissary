@@ -37,7 +37,17 @@ public class ConfigUtil {
     public static final String CONFIG_FILE_ENDING = ResourceReader.CONFIG_SUFFIX;
 
     /** Constant string for files that end with "yaml or yml" */
-    public static final List<String> YAML_FILE_ENDINGS = List.of(ResourceReader.YAML_SUFFIX, ResourceReader.YML_SUFFIX);
+    public static final String YAML_FILE_ENDING = ResourceReader.YAML_SUFFIX;
+
+    /** Constant string for files that end with "yaml or yml" */
+    public static final String YML_FILE_ENDING = ResourceReader.YML_SUFFIX;
+
+    /** Constant string for files that end with {@value} */
+    public static final String TOML_FILE_ENDING = ResourceReader.TOML_SUFFIX;
+
+    /** Config file endings in lookup order: legacy first, then structured formats. */
+    public static final List<String> STRUCTURED_FILE_ENDINGS =
+            List.of(CONFIG_FILE_ENDING, YAML_FILE_ENDING, YML_FILE_ENDING, TOML_FILE_ENDING);
 
     /** Constant string for files that end with {@value} */
     public static final String PROP_FILE_ENDING = ResourceReader.PROP_SUFFIX;
@@ -302,9 +312,8 @@ public class ConfigUtil {
     public static Configurator getConfigInfo(final Class<?> c) throws IOException {
         final String base = c.getName();
         final List<String> prefs = new ArrayList<>();
-        prefs.add(base + CONFIG_FILE_ENDING);
-        for (final String yamlEnding : YAML_FILE_ENDINGS) {
-            prefs.add(base + yamlEnding);
+        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+            prefs.add(base + ending);
         }
         return getConfigInfo(prefs);
     }
@@ -459,13 +468,14 @@ public class ConfigUtil {
      * @return a list of candidate names
      */
     public static List<String> candidateNames(final String name) {
+        // Only .cfg falls back to structured variants; anything else resolves exactly as named.
+        if (!CONFIG_FILE_ENDING.equals(configFileSuffix(name))) {
+            return new ArrayList<>(List.of(name));
+        }
+        final String base = name.substring(0, name.length() - CONFIG_FILE_ENDING.length());
         final List<String> candidates = new ArrayList<>();
-        candidates.add(name);
-        if (name.endsWith(CONFIG_FILE_ENDING)) {
-            final String base = name.substring(0, name.length() - CONFIG_FILE_ENDING.length());
-            for (final String yamlEnding : YAML_FILE_ENDINGS) {
-                candidates.add(base + yamlEnding);
-            }
+        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+            candidates.add(base + ending);
         }
         return candidates;
     }
@@ -542,6 +552,8 @@ public class ConfigUtil {
             r = r.substring(0, r.length() - ResourceReader.YAML_SUFFIX.length()) + ResourceReader.YAML_SUFFIX;
         } else if (r.toUpperCase(Locale.getDefault()).endsWith("/YML")) {
             r = r.substring(0, r.length() - ResourceReader.YML_SUFFIX.length()) + ResourceReader.YML_SUFFIX;
+        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/TOML")) {
+            r = r.substring(0, r.length() - ResourceReader.TOML_SUFFIX.length()) + ResourceReader.TOML_SUFFIX;
         } else if (r.toUpperCase(Locale.getDefault()).endsWith("/XML")) {
             r = r.substring(0, r.length() - XML_FILE_ENDING.length()) + XML_FILE_ENDING;
         } else if (r.toUpperCase(Locale.getDefault()).endsWith("/PROPERTIES")) {
@@ -670,7 +682,7 @@ public class ConfigUtil {
      * For a single entry in 'emissary.config.dir' or comma separated list of config directories, every file that starts
      * with 'emissary.admin.ClassNameInventory' will be combined into a Configurator. This means files like
      * 'emissary.admin.ClassNameInventory.cfg', 'emissary.admin.ClassNameInventory-module1.cfg',
-     * 'emissary.admin.ClassNameInventory.yaml' and 'emissary.admin.ClassNameInventory-whatever.yml' will be used. The
+     * 'emissary.admin.ClassNameInventory.yaml' and 'emissary.admin.ClassNameInventory-whatever.toml' will be used. The
      * concept of flavoring no longer applies to the ClassNameInventory.
      *
      * @return Configurator with all emissary.admin.ClassNameInventory
@@ -690,7 +702,7 @@ public class ConfigUtil {
         }
         // check to make sure we have at least one
         if (classNameInventory.isEmpty()) {
-            throw new EmissaryException(String.format("No %s{.cfg,.yaml,.yml} files found.  No places to start.",
+            throw new EmissaryException(String.format("No %s{.cfg,.yaml,.yml,.toml} files found.  No places to start.",
                     INVENTORY_FILE_PREFIX));
         }
 
@@ -733,14 +745,12 @@ public class ConfigUtil {
      * Whether a filename is a config file
      *
      * @param filename the config name to check
-     * @return true for files that end in {@code .cfg}, {@code .yaml}, or {@code .yml}
+     * @return true for files that end in {@code .cfg}, {@code .yaml}, {@code .yml}, or {@code .toml}
      */
     static boolean isConfigFile(final String filename) {
-        if (filename.endsWith(CONFIG_FILE_ENDING)) {
-            return true;
-        }
-        for (final String yamlEnding : YAML_FILE_ENDINGS) {
-            if (filename.endsWith(yamlEnding)) {
+
+        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+            if (filename.endsWith(ending)) {
                 return true;
             }
         }
@@ -751,16 +761,14 @@ public class ConfigUtil {
      * The config suffix of a filename
      *
      * @param filename the config name to check
-     * @return ({@code .cfg}, {@code .yaml}, or {@code .yml}), or null if it has none.
+     * @return ({@code .cfg}, {@code .yaml}, {@code .yml}, or {@code .toml}), or null if it has none.
      */
     @Nullable
     public static String configFileSuffix(final String filename) {
-        if (filename.endsWith(CONFIG_FILE_ENDING)) {
-            return CONFIG_FILE_ENDING;
-        }
-        for (final String yamlEnding : YAML_FILE_ENDINGS) {
-            if (filename.endsWith(yamlEnding)) {
-                return yamlEnding;
+
+        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+            if (filename.endsWith(ending)) {
+                return ending;
             }
         }
         return null;

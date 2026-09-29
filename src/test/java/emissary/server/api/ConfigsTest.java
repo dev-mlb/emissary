@@ -23,7 +23,9 @@ class ConfigsTest {
     void validate() {
         assertDoesNotThrow(() -> Configs.validate("some.random.config.PlaceConfig"));
         assertDoesNotThrow(() -> Configs.validate("some.random.config.PlaceConfig.yaml"));
+        assertDoesNotThrow(() -> Configs.validate("some.random.config.PlaceConfig.toml"));
         assertEquals("some.random.config.PlaceConfig.yaml", Configs.validate("some.random.config.PlaceConfig.yaml"));
+        assertEquals("some.random.config.PlaceConfig.toml", Configs.validate("some.random.config.PlaceConfig.toml"));
         assertEquals("some.random.config.PlaceConfig.cfg", Configs.validate("some.random.config.PlaceConfig"));
         assertThrows(IllegalArgumentException.class, () -> Configs.validate("/dev/some.random.config.PlaceConfig"));
         assertThrows(IllegalArgumentException.class, () -> Configs.validate("https://dev/some.random.config.PlaceConfig"));

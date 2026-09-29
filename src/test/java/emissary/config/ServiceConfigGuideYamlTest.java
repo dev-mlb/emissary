@@ -123,7 +123,7 @@ class ServiceConfigGuideYamlTest extends UnitTest {
     @Test
     void testCandidateNames() {
         final List<String> cands = ConfigUtil.candidateNames("foo.cfg");
-        assertEquals(List.of("foo.cfg", "foo.yaml", "foo.yml"), cands);
+        assertEquals(List.of("foo.cfg", "foo.yaml", "foo.yml", "foo.toml"), cands);
         assertEquals(List.of("foo.yaml"), ConfigUtil.candidateNames("foo.yaml"));
         assertEquals(List.of("foo.yml"), ConfigUtil.candidateNames("foo.yml"));
     }

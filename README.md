@@ -260,25 +260,25 @@ or in offline mode:
 ./emissary config --place emissary.place.sample.ToLowerPlace --offline --detailed
 ```
 
-#### YAML configuration (.yaml/.yml)
+#### YAML and TOML configuration (.yaml/.yml/.toml)
 
-Places and services can alternatively be configured with YAML files ending in `.yaml` or `.yml`. When a
-`Foo.cfg` is requested but only `Foo.yaml` (or `Foo.yml`) exists (on disk or on the classpath), the YAML file is
+Places and services can alternatively be configured with YAML (`.yaml`/`.yml`) or TOML (`.toml`) files. When a
+`Foo.cfg` is requested but only `Foo.yaml` (or `Foo.yml`, or `Foo.toml`) exists (on disk or on the classpath), that file is
 loaded instead; when both exist, the `.cfg` wins. Everything else — flavors, `IMPORT_FILE`,
 `@{VAR}` substitution, and the `config --place` inspection above — works the same.
 
-Mapping to the legacy format:
+Mapping to the legacy format (YAML first, TOML second):
 
-| YAML | Legacy `.cfg` |
-|---|---|
-| `KEY: value` | `KEY = value` |
-| `KEY: [a, b]` (sequence) | repeated `KEY = a` / `KEY = b` entries, in order |
-| `NESTED: {ONE: x}` | `NESTED_ONE = x` (nested maps flatten with `_`) |
-| `"!remove": {KEY: v}` | `KEY != v` (`"*"` removes all entries) |
-| `KEY: [a, {"!remove": v}, b]` | positional removal inside a sequence, evaluated in order |
-| `"!import": file.yaml` | `IMPORT_FILE = file.yaml` |
-| `"!opt-import": [a, b]` | `OPT_IMPORT_FILE` entries |
-| `"!flavor-NAME": {...}` | inline `base-NAME.cfg` overrides, active only with that flavor |
+| YAML | TOML | Legacy `.cfg` |
+|---|---|---|
+| `KEY: value` | `KEY = value` | `KEY = value` |
+| `KEY: [a, b]` (sequence) | `KEY = ["a", "b"]` (array) | repeated `KEY = a` / `KEY = b` entries, in order |
+| `NESTED: {ONE: x}` | `[NESTED]` + `ONE = x` | `NESTED_ONE = x` (nested maps flatten with `_`) |
+| `"!remove": {KEY: v}` | `["!remove"]` + `KEY = v` | `KEY != v` (`"*"` removes all entries) |
+| `KEY: [a, {"!remove": v}, b]` | `KEY = ["a", {"!remove" = v}, "b"]` | positional removal, evaluated in order |
+| `"!import": file.yaml` | `"!import" = "file.toml"` | `IMPORT_FILE = file` |
+| `"!opt-import": [a, b]` | `"!opt-import" = [a, b]` | `OPT_IMPORT_FILE` entries |
+| `"!flavor-NAME": {...}` | `["!flavor-NAME"]` + keys | inline `base-NAME.cfg` overrides, active only with that flavor |
 
 Notes: 
 - Quote the `!` keys, since a bare `!` starts a YAML tag. 
@@ -288,6 +288,9 @@ where legacy config kept them literal.
   warning); use a  sequence for multi-valued entries. 
 - Starting the server with `--strict` turns duplicate keys and flatten collisions (e.g. `NESTED: {B_C: x}` vs a literal 
   `NESTED_B_C: y`) into startup failures instead of warnings.
+- TOML has no null value: converting a null entry is refused, convert it by hand.
+- In TOML, dotted keys nest (`a.b = 1` becomes `A_B`), so quote dotted keys to keep them literal — and note that keys 
+  after a `[table]` header belong to that table, while dotted keys never change the current table.
 
 #### Server (Cluster)
 

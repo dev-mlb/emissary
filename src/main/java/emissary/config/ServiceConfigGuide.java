@@ -5,6 +5,7 @@ import emissary.util.io.ResourceReader;
 import com.fasterxml.jackson.core.JsonParser;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.dataformat.toml.TomlFactory;
 import com.fasterxml.jackson.dataformat.yaml.YAMLFactory;
 import jakarta.annotation.Nullable;
 import org.apache.commons.lang3.ArrayUtils;
@@ -216,6 +217,10 @@ public class ServiceConfigGuide implements Configurator, Serializable {
             readYamlConfigData(is, filename);
             return;
         }
+        if (isTomlFile(filename)) {
+            readTomlConfigData(is, filename);
+            return;
+        }
         final Reader r = new BufferedReader(new InputStreamReader(is, UTF_8));
         final StreamTokenizer in = new StreamTokenizer(r);
         int nextToken = StreamTokenizer.TT_WORD;
@@ -282,6 +287,16 @@ public class ServiceConfigGuide implements Configurator, Serializable {
     }
 
     /**
+     * Whether the named config file is TOML.
+     *
+     * @param filename the config name to check
+     * @return true for {@code .toml} names
+     */
+    static boolean isTomlFile(final String filename) {
+        return filename.toLowerCase(Locale.getDefault()).endsWith(ResourceReader.TOML_SUFFIX);
+    }
+
+    /**
      * Parse YAML config data into entries.
      *
      * @param is the stream to read, closed on return
@@ -299,9 +314,9 @@ public class ServiceConfigGuide implements Configurator, Serializable {
                 parsed = strictMapper.readValue(data, Object.class);
             } catch (JsonProcessingException e) {
                 if (e.getOriginalMessage() != null && e.getOriginalMessage().contains("Duplicate field")) {
-                    // YAML mappings can't repeat keys; keep the last value with a warning (strict mode fails instead).
-                    final String detail = "YAML " + yamlLocation(filename, e) + " contains duplicate keys ("
-                            + e.getOriginalMessage() + "); use a sequence for multi-valued entries.";
+                    // Mappings can't repeat keys; keep the last value with a warning (strict mode fails instead).
+                    final String detail = "YAML " + parseLocation(filename, e) + " contains duplicate keys ("
+                            + e.getOriginalMessage() + "); use an array for multi-valued entries.";
                     if (ConfigUtil.isStrictMode()) {
                         throw new IOException(detail + " Failing because strict startup mode is enabled.", e);
                     }
@@ -311,19 +326,50 @@ public class ServiceConfigGuide implements Configurator, Serializable {
                     throw e;
                 }
             }
-            if (parsed instanceof Map) {
-                flattenYaml("", "$", (Map<String, Object>) parsed, filename);
-            } else if (parsed != null) {
-                final String kind = parsed instanceof List ? "sequence" : "scalar";
-                throw new IOException(
-                        "YAML config " + filename + " must be a mapping at the top level, found " + kind);
-            } else {
-                logger.debug("YAML config {} is empty, no entries loaded", filename);
-            }
+            flattenParsed(parsed, filename, "YAML");
         } catch (JsonProcessingException e) {
-            throw new IOException("Cannot parse YAML configuration " + yamlLocation(filename, e) + ": " + e.getOriginalMessage(), e);
+            throw new IOException("Cannot parse YAML configuration " + parseLocation(filename, e) + ": " + e.getOriginalMessage(), e);
         } finally {
             is.close();
+        }
+    }
+
+    /**
+     * Parse TOML config data into entries. Duplicate keys are always an error -- the TOML spec forbids them, so use arrays
+     * for multi-valued entries. TOML has no null value; use {@code "@{NULL}"} for null assignments.
+     *
+     * @param is the stream to read, closed on return
+     * @param filename the config name, used for parser dispatch context and error messages
+     * @throws IOException on syntax errors or unsupported structure
+     */
+    protected void readTomlConfigData(final InputStream is, final String filename) throws IOException {
+        try {
+            final ObjectMapper mapper = new ObjectMapper(new TomlFactory());
+            flattenParsed(mapper.readValue(is.readAllBytes(), Object.class), filename, "TOML");
+        } catch (JsonProcessingException e) {
+            throw new IOException("Cannot parse TOML configuration " + parseLocation(filename, e) + ": " + e.getOriginalMessage(), e);
+        } finally {
+            is.close();
+        }
+    }
+
+    /**
+     * Flatten a parsed top-level value into entries.
+     *
+     * @param parsed the parsed document
+     * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
+     * @throws IOException when the top level is not a mapping
+     */
+    @SuppressWarnings("unchecked")
+    private void flattenParsed(final Object parsed, final String filename, final String format) throws IOException {
+        if (parsed instanceof Map) {
+            flattenMap("", "$", (Map<String, Object>) parsed, filename, format);
+        } else if (parsed != null) {
+            final String kind = parsed instanceof List ? ("TOML".equals(format) ? "array" : "sequence") : "scalar";
+            throw new IOException(format + " config " + filename + " must be a mapping at the top level, found " + kind);
+        } else {
+            logger.debug("{} config {} is empty, no entries loaded", format, filename);
         }
     }
 
@@ -334,7 +380,7 @@ public class ServiceConfigGuide implements Configurator, Serializable {
      * @param e Jackson parse failure
      * @return failure as {@code filename:line:column}, or filename when no location is available.
      */
-    private static String yamlLocation(final String filename, final JsonProcessingException e) {
+    private static String parseLocation(final String filename, final JsonProcessingException e) {
         if (e.getLocation() == null || e.getLocation().getLineNr() < 1) {
             return filename;
         }
@@ -342,37 +388,40 @@ public class ServiceConfigGuide implements Configurator, Serializable {
     }
 
     /**
-     * Flatten a parsed YAML mapping into entries with the default operator.
+     * Flatten a parsed mapping into entries with the default operator.
      *
      * @param prefix flattened key prefix, empty at the top level
-     * @param yamlPath dotted source path for error messages, starting at {@code $}
+     * @param sourcePath dotted source path for error messages, starting at {@code $}
      * @param map the parsed mapping
      * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
      * @throws IOException on unsupported structure or entry failures
      */
     @SuppressWarnings("unchecked")
-    private void flattenYaml(final String prefix, final String yamlPath, final Map<String, Object> map, final String filename)
+    private void flattenMap(final String prefix, final String sourcePath, final Map<String, Object> map, final String filename,
+            final String format)
             throws IOException {
-        flattenYaml(prefix, yamlPath, map, filename, "=");
+        flattenMap(prefix, sourcePath, map, filename, format, "=");
     }
 
     /**
-     * Flatten a parsed YAML mapping into config entries. Quoted top-level {@code !} keys are operators: {@code "!remove"},
-     * {@code "!remove KEY"} (positional removal), {@code "!import"}, {@code "!opt-import"}, and {@code "!flavor-NAME"} (or
-     * grouped {@code "!flavor": {NAME: ...}}). See {@code Sample.yaml} for the full mapping.
+     * Flatten a parsed mapping into config entries. Quoted top-level {@code !} keys are operators: {@code "!remove"},
+     * {@code "!import"}, {@code "!opt-import"}, and {@code "!flavor-NAME"} (or grouped {@code "!flavor": {NAME: ...}}). See
+     * {@code Sample.yaml} for the full mapping.
      *
      * @param prefix flattened key prefix, empty at the top level
-     * @param yamlPath dotted source path for error messages, starting at {@code $}
+     * @param sourcePath dotted source path for error messages, starting at {@code $}
      * @param map the parsed mapping
      * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
      * @param operatorArg the entry operator ({@code =} or {@code !=})
      * @throws IOException on unsupported structure or entry failures
      */
     @SuppressWarnings("unchecked")
-    private void flattenYaml(final String prefix, final String yamlPath, final Map<String, Object> map, final String filename,
-            final String operatorArg)
+    private void flattenMap(final String prefix, final String sourcePath, final Map<String, Object> map, final String filename,
+            final String format, final String operatorArg)
             throws IOException {
-        flattenYamlEntries(prefix, yamlPath, map, filename, operatorArg, false, new LinkedHashMap<>());
+        flattenEntries(prefix, sourcePath, map, filename, format, operatorArg, false, new LinkedHashMap<>());
         if (prefix.isEmpty()) {
             // Second pass: active flavor sections override the base entries flattened above.
             final Set<String> activeFlavors = ConfigUtil.getUniqueFlavors();
@@ -382,37 +431,49 @@ public class ServiceConfigGuide implements Configurator, Serializable {
                 if (flavorName == null) {
                     continue;
                 }
-                final String itemPath = yamlPath + "." + rawKey;
+                final String itemPath = sourcePath + "." + rawKey;
                 final Object v = e.getValue();
                 if (!(v instanceof Map)) {
-                    throw new IOException("YAML " + filename + " key \"" + rawKey + "\" at " + itemPath
-                            + " must be a mapping, found " + yamlKind(v));
+                    throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + itemPath
+                            + " must be a mapping, found " + valueKind(v));
                 }
                 if ("!flavor".equals(rawKey)) {
                     for (final Map.Entry<String, Object> group : ((Map<String, Object>) v).entrySet()) {
                         applyInlineFlavor(group.getKey(), group.getValue(), itemPath + "." + group.getKey(), filename,
-                                activeFlavors, new LinkedHashMap<>());
+                                format, activeFlavors, new LinkedHashMap<>());
                     }
                 } else if (activeFlavors.contains(flavorName)) {
-                    flattenYamlEntries("", itemPath, (Map<String, Object>) v, filename, "=", true, new LinkedHashMap<>());
+                    flattenEntries("", itemPath, (Map<String, Object>) v, filename, format, "=", true, new LinkedHashMap<>());
                 } else {
-                    logger.debug("Skipping inactive YAML flavor section {} in {}", rawKey, filename);
+                    logger.debug("Skipping inactive {} flavor section {} in {}", format, rawKey, filename);
                 }
             }
         }
     }
 
+    /**
+     * Apply one grouped {@code "!flavor": {NAME: ...}} section, skipping inactive flavors entirely.
+     *
+     * @param flavorName the flavor name
+     * @param value the section mapping
+     * @param itemPath dotted source path for error messages
+     * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
+     * @param activeFlavors the enabled flavors
+     * @param emittedKeys flattened keys already emitted, for collision detection
+     * @throws IOException on unsupported structure
+     */
     @SuppressWarnings("unchecked")
     private void applyInlineFlavor(final String flavorName, final Object value, final String itemPath, final String filename,
-            final Set<String> activeFlavors, final Map<String, String> emittedKeys) throws IOException {
+            final String format, final Set<String> activeFlavors, final Map<String, String> emittedKeys) throws IOException {
         if (!(value instanceof Map)) {
-            throw new IOException("YAML " + filename + " flavor \"" + flavorName + "\" at " + itemPath
-                    + " must be a mapping, found " + yamlKind(value));
+            throw new IOException(format + " " + filename + " flavor \"" + flavorName + "\" at " + itemPath
+                    + " must be a mapping, found " + valueKind(value));
         }
         if (activeFlavors.contains(flavorName)) {
-            flattenYamlEntries("", itemPath, (Map<String, Object>) value, filename, "=", true, emittedKeys);
+            flattenEntries("", itemPath, (Map<String, Object>) value, filename, format, "=", true, emittedKeys);
         } else {
-            logger.debug("Skipping inactive YAML flavor section {} in {}", flavorName, filename);
+            logger.debug("Skipping inactive {} flavor section {} in {}", format, flavorName, filename);
         }
     }
 
@@ -440,36 +501,37 @@ public class ServiceConfigGuide implements Configurator, Serializable {
      * Flatten one mapping level into entries.
      *
      * @param prefix flattened key prefix, empty at the top level
-     * @param yamlPath dotted source path for error messages
+     * @param sourcePath dotted source path for error messages
      * @param map the parsed mapping
      * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
      * @param operatorArg the entry operator ({@code =} or {@code !=})
      * @param prepend true to insert entries at the top, for flavor overrides
      * @param emittedKeys flattened keys already emitted, with their source paths, for collision detection
      * @throws IOException on unsupported structure or entry failures
      */
     @SuppressWarnings("unchecked")
-    private void flattenYamlEntries(final String prefix, final String yamlPath, final Map<String, Object> map, final String filename,
-            final String operatorArg, final boolean prepend, final Map<String, String> emittedKeys)
+    private void flattenEntries(final String prefix, final String sourcePath, final Map<String, Object> map, final String filename,
+            final String format, final String operatorArg, final boolean prepend, final Map<String, String> emittedKeys)
             throws IOException {
         for (final Map.Entry<String, Object> e : map.entrySet()) {
             final String rawKey = e.getKey();
             final Object v = e.getValue();
-            final String itemPath = yamlPath + "." + rawKey;
+            final String itemPath = sourcePath + "." + rawKey;
             if (!prefix.isEmpty() && flavorSectionName(rawKey) != null) {
-                throw new IOException("YAML " + filename + " key \"" + rawKey + "\" at " + itemPath
+                throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + itemPath
                         + " is only allowed at the top level");
             }
             if (prefix.isEmpty() && flavorSectionName(rawKey) != null) {
-                // Handled in the flavor second pass of flattenYaml.
+                // Handled in the flavor second pass of flattenMap.
                 continue;
             }
             if (prefix.isEmpty() && "!remove".equals(rawKey)) {
                 if (!(v instanceof Map)) {
                     throw new IOException(
-                            "YAML " + filename + " key \"!remove\" at " + itemPath + " must be a mapping, found " + yamlKind(v));
+                            format + " " + filename + " key \"!remove\" at " + itemPath + " must be a mapping, found " + valueKind(v));
                 }
-                flattenYamlEntries("", itemPath, (Map<String, Object>) v, filename, "!=", prepend, emittedKeys);
+                flattenEntries("", itemPath, (Map<String, Object>) v, filename, format, "!=", prepend, emittedKeys);
                 continue;
             }
             if (prefix.isEmpty() && ("!import".equals(rawKey) || "!opt-import".equals(rawKey))) {
@@ -479,41 +541,41 @@ public class ServiceConfigGuide implements Configurator, Serializable {
                     for (final Object item : (List<Object>) v) {
                         final String elementPath = itemPath + "[" + i++ + "]";
                         if (item instanceof Map || item instanceof List) {
-                            throw new IOException("YAML " + filename + " key \"" + rawKey + "\" at " + elementPath
-                                    + " must be a scalar or sequence of scalars, found nested " + yamlKind(item));
+                            throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + elementPath
+                                    + " must be a scalar or " + sequenceWord(format) + " of scalars, found nested " + valueKind(item));
                         }
-                        addYamlEntry(importKey, item, "=", filename, elementPath, false);
+                        addMappedEntry(importKey, item, "=", filename, format, elementPath, false);
                     }
                 } else {
                     if (v instanceof Map) {
-                        throw new IOException("YAML " + filename + " key \"" + rawKey + "\" at " + itemPath
-                                + " must be a scalar or sequence of scalars, found mapping");
+                        throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + itemPath
+                                + " must be a scalar or " + sequenceWord(format) + " of scalars, found mapping");
                     }
-                    addYamlEntry(importKey, v, "=", filename, itemPath, false);
+                    addMappedEntry(importKey, v, "=", filename, format, itemPath, false);
                 }
                 continue;
             }
             final String key = prefix.isEmpty() ? rawKey : prefix + "_" + rawKey;
             if (v instanceof Map) {
-                flattenYamlEntries(key, itemPath, (Map<String, Object>) v, filename, operatorArg, prepend, emittedKeys);
+                flattenEntries(key, itemPath, (Map<String, Object>) v, filename, format, operatorArg, prepend, emittedKeys);
             } else if (v instanceof List) {
                 int i = 0;
                 for (final Object item : (List<Object>) v) {
                     final String elementPath = itemPath + "[" + i++ + "]";
                     if (item instanceof List) {
-                        throw new IOException("YAML " + filename + " key \"" + key + "\" at " + elementPath
-                                + " must be a scalar or sequence of scalars, found nested " + yamlKind(item));
+                        throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath
+                                + " must be a scalar or " + sequenceWord(format) + " of scalars, found nested " + valueKind(item));
                     }
                     if (item instanceof Map) {
-                        applyYamlSequenceOp(key, elementPath, item, filename);
+                        applySequenceOp(key, elementPath, item, filename, format);
                         continue;
                     }
-                    checkYamlCollision(key, itemPath, filename, operatorArg, prepend, emittedKeys);
-                    addYamlEntry(key, item, operatorArg, filename, elementPath, prepend);
+                    checkKeyCollision(key, itemPath, filename, format, operatorArg, prepend, emittedKeys);
+                    addMappedEntry(key, item, operatorArg, filename, format, elementPath, prepend);
                 }
             } else {
-                checkYamlCollision(key, itemPath, filename, operatorArg, prepend, emittedKeys);
-                addYamlEntry(key, v, operatorArg, filename, itemPath, prepend);
+                checkKeyCollision(key, itemPath, filename, format, operatorArg, prepend, emittedKeys);
+                addMappedEntry(key, v, operatorArg, filename, format, itemPath, prepend);
             }
         }
     }
@@ -526,11 +588,12 @@ public class ServiceConfigGuide implements Configurator, Serializable {
      * @param elementPath dotted source path of this item
      * @param item the map item
      * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
      * @throws IOException on unsupported operations
      */
     @SuppressWarnings("unchecked")
-    private void applyYamlSequenceOp(final String key, final String elementPath, final Object item,
-            final String filename) throws IOException {
+    private void applySequenceOp(final String key, final String elementPath, final Object item,
+            final String filename, final String format) throws IOException {
         final Map<String, Object> op = (Map<String, Object>) item;
         if (op.size() == 1 && op.containsKey("!remove")) {
             final Object target = op.get("!remove");
@@ -538,45 +601,46 @@ public class ServiceConfigGuide implements Configurator, Serializable {
                 int i = 0;
                 for (final Object sub : (List<Object>) target) {
                     if (sub instanceof Map || sub instanceof List) {
-                        throw new IOException("YAML " + filename + " key \"" + key + "\" at " + elementPath + "[" + i + "]"
-                                + " must be a scalar or sequence of scalars, found nested " + yamlKind(sub));
+                        throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath + "[" + i + "]"
+                                + " must be a scalar or " + sequenceWord(format) + " of scalars, found nested " + valueKind(sub));
                     }
-                    addYamlEntry(key, sub, "!=", filename, elementPath + "[" + i++ + "]", false);
+                    addMappedEntry(key, sub, "!=", filename, format, elementPath + "[" + i++ + "]", false);
                 }
             } else if (!(target instanceof Map)) {
-                addYamlEntry(key, target, "!=", filename, elementPath, false);
+                addMappedEntry(key, target, "!=", filename, format, elementPath, false);
             } else {
-                throw new IOException("YAML " + filename + " key \"" + key + "\" at " + elementPath
+                throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath
                         + " has an unsupported positional operation;"
                         + " sequence maps must be single-entry {\"!remove\": scalar-or-sequence}.");
             }
             return;
         }
-        throw new IOException("YAML " + filename + " key \"" + key + "\" at " + elementPath
-                + " must be a scalar or sequence of scalars, found nested " + yamlKind(item)
+        throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath
+                + " must be a scalar or " + sequenceWord(format) + " of scalars, found nested " + valueKind(item)
                 + "; sequence maps must be single-entry {\"!remove\": scalar-or-sequence}.");
     }
 
     /**
-     * Warn when two YAML locations flatten to the same key (lookups return the first, substitution sees the last). Skips
+     * Warn when two source locations flatten to the same key (lookups return the first, substitution sees the last). Skips
      * intentional overrides, removals, and repeated sequence items. Strict mode fails instead.
      *
      * @param key the flattened config key
      * @param itemPath dotted source path of this occurrence
      * @param filename the config name for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
      * @param operatorArg the entry operator ({@code =} or {@code !=})
      * @param prepend true for flavor overrides, which never collide
      * @param emittedKeys flattened keys already emitted, with their source paths
      * @throws IOException in strict mode on collision
      */
-    private static void checkYamlCollision(final String key, final String itemPath, final String filename, final String operatorArg,
-            final boolean prepend, final Map<String, String> emittedKeys) throws IOException {
+    private static void checkKeyCollision(final String key, final String itemPath, final String filename, final String format,
+            final String operatorArg, final boolean prepend, final Map<String, String> emittedKeys) throws IOException {
         if (prepend || "!=".equals(operatorArg)) {
             return;
         }
         final String firstPath = emittedKeys.putIfAbsent(key, itemPath);
         if (firstPath != null && !firstPath.equals(itemPath)) {
-            final String detail = "YAML " + filename + " key '" + key + "' from " + itemPath
+            final String detail = format + " " + filename + " key '" + key + "' from " + itemPath
                     + " collides with the same key from " + firstPath + ".";
             if (ConfigUtil.isStrictMode()) {
                 throw new IOException(detail + " Failing because strict startup mode is enabled.");
@@ -587,29 +651,30 @@ public class ServiceConfigGuide implements Configurator, Serializable {
     }
 
     /**
-     * Feed one flattened YAML value through the entry pipeline, wrapping failures with the YAML key and path.
+     * Feed one flattened value through the entry pipeline, wrapping failures with the key and path.
      *
      * @param key the flattened config key
-     * @param value the raw YAML value
+     * @param value the raw value
      * @param operatorArg the entry operator ({@code =} or {@code !=})
      * @param filename the config name for error messages
-     * @param yamlPath dotted source path for error messages
+     * @param format the format label for error messages ({@code YAML} or {@code TOML})
+     * @param sourcePath dotted source path for error messages
      * @param prepend true to insert at the top, for flavor overrides
      * @throws IOException wrapping the entry failure
      */
-    private void addYamlEntry(final String key, final Object value, final String operatorArg, final String filename,
-            final String yamlPath, final boolean prepend) throws IOException {
+    private void addMappedEntry(final String key, final Object value, final String operatorArg, final String filename,
+            final String format, final String sourcePath, final boolean prepend) throws IOException {
         final String sval = value == null ? NULL_VALUE : String.valueOf(value);
         try {
             handleNewEntry(key, sval, operatorArg, filename, 0, prepend);
         } catch (IOException e) {
             throw new IOException(
-                    "YAML " + filename + " entry '" + key + "' at " + yamlPath + " failed: " + e.getMessage(), e);
+                    format + " " + filename + " entry '" + key + "' at " + sourcePath + " failed: " + e.getMessage(), e);
         }
     }
 
     /** Value kind name for error messages. */
-    private static String yamlKind(final Object v) {
+    private static String valueKind(final Object v) {
         if (v instanceof Map) {
             return "mapping";
         } else if (v instanceof List) {
@@ -618,6 +683,16 @@ public class ServiceConfigGuide implements Configurator, Serializable {
             return "null";
         }
         return "scalar";
+    }
+
+    /**
+     * Collection kind name for error messages: TOML calls them arrays.
+     *
+     * @param format the format label ({@code YAML} or {@code TOML})
+     * @return {@code array} for TOML, else {@code sequence}
+     */
+    private static String sequenceWord(final String format) {
+        return "TOML".equals(format) ? "array" : "sequence";
     }
 
     /**
