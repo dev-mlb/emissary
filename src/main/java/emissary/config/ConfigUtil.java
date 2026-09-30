@@ -748,7 +748,6 @@ public class ConfigUtil {
      * @return true for files that end in {@code .cfg}, {@code .yaml}, {@code .yml}, or {@code .toml}
      */
     static boolean isConfigFile(final String filename) {
-
         for (final String ending : STRUCTURED_FILE_ENDINGS) {
             if (filename.endsWith(ending)) {
                 return true;
@@ -765,7 +764,6 @@ public class ConfigUtil {
      */
     @Nullable
     public static String configFileSuffix(final String filename) {
-
         for (final String ending : STRUCTURED_FILE_ENDINGS) {
             if (filename.endsWith(ending)) {
                 return ending;

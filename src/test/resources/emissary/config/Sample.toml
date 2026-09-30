@@ -25,7 +25,7 @@
 #     and 0xFF parses to 255 while legacy config kept it literal.
 #   - Dotted keys nest: quote them to stay literal ("a.b" stays a.b, a.b becomes a_b).
 #   - Duplicate keys are always an error (the TOML spec forbids them); use arrays.
-#   - TOML has no null value: converting a null entry is refused, convert it by hand.
+#   - TOML has no null literal; use "<null>" for null assignments.
 #   - Mapping keys cannot repeat: unlike legacy FOO = a / FOO = b (two entries),
 #     writing FOO twice fails to parse. Use an array for multi-valued entries.
 #   - Nested tables flatten with '_', so [NESTED] B_C = x and a literal NESTED_B_C = y

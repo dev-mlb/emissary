@@ -288,7 +288,6 @@ where legacy config kept them literal.
   warning); use a  sequence for multi-valued entries. 
 - Starting the server with `--strict` turns duplicate keys and flatten collisions (e.g. `NESTED: {B_C: x}` vs a literal 
   `NESTED_B_C: y`) into startup failures instead of warnings.
-- TOML has no null value: converting a null entry is refused, convert it by hand.
 - In TOML, dotted keys nest (`a.b = 1` becomes `A_B`), so quote dotted keys to keep them literal — and note that keys 
   after a `[table]` header belong to that table, while dotted keys never change the current table.
 

@@ -68,10 +68,10 @@ class ServiceConfigGuideTomlTest extends UnitTest {
 
     @Test
     void testIsTomlFile() {
-        assertTrue(ServiceConfigGuide.isTomlFile("foo.toml"));
-        assertTrue(ServiceConfigGuide.isTomlFile("foo.TOML"));
-        assertFalse(ServiceConfigGuide.isTomlFile("foo.cfg"));
-        assertFalse(ServiceConfigGuide.isTomlFile("foo.yaml"));
+        assertTrue(StructuredConfigParser.isTomlFile("foo.toml"));
+        assertTrue(StructuredConfigParser.isTomlFile("foo.TOML"));
+        assertFalse(StructuredConfigParser.isTomlFile("foo.cfg"));
+        assertFalse(StructuredConfigParser.isTomlFile("foo.yaml"));
     }
 
     @Test
