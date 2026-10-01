@@ -131,6 +131,31 @@ class ServiceConfigGuideTomlTest extends UnitTest {
     }
 
     @Test
+    void testFlavorImportOverridesBase(@TempDir final Path dir) throws Exception {
+        Files.writeString(dir.resolve("prod.toml"), "FOO = \"prod\"\n", UTF_8);
+        Files.writeString(dir.resolve("app.toml"),
+                "FOO = \"base\"\n[\"!flavor-PROD\"]\n\"!import\" = \"prod.toml\"\n", UTF_8);
+        withFlavor(dir, "PROD", () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("app.toml");
+            assertEquals("prod", cfg.findStringEntry("FOO"));
+            assertEquals(List.of("prod", "base"), cfg.findEntries("FOO"));
+        });
+    }
+
+    @Test
+    void testInlineFlavorsFollowPropertyOrder(@TempDir final Path dir) throws Exception {
+        // Like YAML: last flavor in emissary.config.flavor wins, regardless of document order.
+        Files.writeString(dir.resolve("multi.toml"),
+                "FOO = \"base\"\n[\"!flavor-MYFLAV\"]\nFOO = \"myflav\"\n[\"!flavor-CLUSTER\"]\nFOO = \"cluster\"\n", UTF_8);
+        withFlavor(dir, "CLUSTER,MYFLAV", () -> {
+            assertEquals("myflav", ConfigUtil.getConfigInfo("multi.toml").findStringEntry("FOO"));
+        });
+        withFlavor(dir, "MYFLAV,CLUSTER", () -> {
+            assertEquals("cluster", ConfigUtil.getConfigInfo("multi.toml").findStringEntry("FOO"));
+        });
+    }
+
+    @Test
     void testCfgFallsBackToToml(@TempDir final Path dir) throws Exception {
         Files.writeString(dir.resolve("only.toml"), "FOO = \"from-toml\"\n", UTF_8);
         withConfigDir(dir, () -> {
@@ -155,7 +180,7 @@ class ServiceConfigGuideTomlTest extends UnitTest {
     }
 
     @Test
-    void testDocumentedSampleParses() throws IOException {
+    void testSampleParses() throws IOException {
         final Configurator cfg = ConfigUtil.getConfigInfo("emissary.config.Sample.toml");
         assertEquals("SamplePlace", cfg.findStringEntry("PLACE_NAME"));
         assertEquals(2, cfg.findEntries("RENDEZVOUS_PEER").size());

@@ -2,9 +2,11 @@ package emissary.config;
 
 import emissary.core.EmissaryException;
 import emissary.core.EmissaryRuntimeException;
+import emissary.directory.EmissaryNode;
 import emissary.test.core.junit5.UnitTest;
 import emissary.util.shell.Executrix;
 
+import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
@@ -120,6 +122,78 @@ class ConfigUtilTest extends UnitTest {
         prefs.add("bar");
         prefs.add("quuz");
         assertThrows(IOException.class, () -> ConfigUtil.getConfigInfo(prefs));
+    }
+
+    @Test
+    void testBrokenPreference(@TempDir final Path dir) throws Exception {
+        // A preference file that exists but fails to parse must abort, not fall through to the next preference.
+        Files.writeString(dir.resolve("peer-host-8001.yaml"), "BROKEN: [unclosed\n", UTF_8);
+        Files.writeString(dir.resolve("peer.cfg"), "WHO = \"generic\"\n", UTF_8);
+        final String origDir = System.getProperty(CONFIG_DIR_PROPERTY);
+        System.setProperty(CONFIG_DIR_PROPERTY, dir.toString());
+        ConfigUtil.initialize();
+        final Logger parserLogger = (Logger) LoggerFactory.getLogger(StructuredConfigParser.class);
+        final ListAppender<ILoggingEvent> parserAppender = new ListAppender<>();
+        parserAppender.start();
+        parserLogger.addAppender(parserAppender);
+        try {
+            final List<String> prefs = List.of("peer-host-8001.cfg", "peer.cfg");
+            final IOException e = assertThrows(IOException.class, () -> ConfigUtil.getConfigInfo(prefs));
+            assertTrue(e.getMessage().contains("peer-host-8001.yaml"), "Parse failure must name the file, was: " + e.getMessage());
+            assertTrue(parserAppender.list.stream().anyMatch(event -> event.getLevel() == Level.ERROR
+                    && event.getFormattedMessage().contains("peer-host-8001.yaml")), "Parse failure must log at ERROR");
+        } finally {
+            parserLogger.detachAppender(parserAppender);
+            if (origDir != null) {
+                System.setProperty(CONFIG_DIR_PROPERTY, origDir);
+            }
+            ConfigUtil.initialize();
+        }
+    }
+
+    @Test
+    void testMissingPreferences(@TempDir final Path dir) throws Exception {
+        // Preferences that exist nowhere still produce the generic message.
+        final String origDir = System.getProperty(CONFIG_DIR_PROPERTY);
+        System.setProperty(CONFIG_DIR_PROPERTY, dir.toString());
+        ConfigUtil.initialize();
+        try {
+            final IOException e = assertThrows(IOException.class,
+                    () -> ConfigUtil.getConfigInfo(List.of("nothere.cfg", "alsonot.cfg")));
+            assertTrue(e.getMessage().contains("None of the 2 preferences"), "Was: " + e.getMessage());
+        } finally {
+            if (origDir != null) {
+                System.setProperty(CONFIG_DIR_PROPERTY, origDir);
+            }
+            ConfigUtil.initialize();
+        }
+    }
+
+    @Test
+    void testStrictDuplicate(@TempDir final Path dir) throws Exception {
+        // Strict mode must not be bypassed by falling through to the next preference.
+        Files.writeString(dir.resolve("dup.yaml"), "FOO: a\nFOO: b\n", UTF_8);
+        Files.writeString(dir.resolve("other.cfg"), "WHO = \"other\"\n", UTF_8);
+        final String origDir = System.getProperty(CONFIG_DIR_PROPERTY);
+        final String origStrict = System.getProperty(ConfigUtil.STRICT_MODE_PROPERTY);
+        System.setProperty(CONFIG_DIR_PROPERTY, dir.toString());
+        System.setProperty(ConfigUtil.STRICT_MODE_PROPERTY, "true");
+        ConfigUtil.initialize();
+        try {
+            final IOException e = assertThrows(IOException.class,
+                    () -> ConfigUtil.getConfigInfo(List.of("dup.cfg", "other.cfg")));
+            assertTrue(e.getMessage().contains("strict"), "Was: " + e.getMessage());
+        } finally {
+            if (origDir != null) {
+                System.setProperty(CONFIG_DIR_PROPERTY, origDir);
+            }
+            if (origStrict != null) {
+                System.setProperty(ConfigUtil.STRICT_MODE_PROPERTY, origStrict);
+            } else {
+                System.clearProperty(ConfigUtil.STRICT_MODE_PROPERTY);
+            }
+            ConfigUtil.initialize();
+        }
     }
 
     @Test
@@ -706,6 +780,22 @@ class ConfigUtilTest extends UnitTest {
     void testClassInstantiationNotSubType() {
         String cfgFile = "emissary.config.ClassInstantiationTest.cfg";
         assertThrows(ClassCastException.class, () -> ConfigUtil.instantiateFromConfig(String.class, cfgFile));
+    }
+
+    @Test
+    void testStrictModeProperty() {
+        assertEquals(EmissaryNode.STRICT_STARTUP_MODE, ConfigUtil.STRICT_MODE_PROPERTY,
+                "Renaming either constant must not silently fork the property");
+    }
+
+    @Test
+    void testSuffixCaseInsensitive() {
+        assertEquals(".yaml", ConfigUtil.configFileSuffix("Foo.YAML"));
+        assertEquals(".yml", ConfigUtil.configFileSuffix("Foo.Yml"));
+        assertEquals(".toml", ConfigUtil.configFileSuffix("Foo.TOML"));
+        assertEquals(".cfg", ConfigUtil.configFileSuffix("Foo.CFG"));
+        assertNull(ConfigUtil.configFileSuffix("Foo.txt"));
+        assertTrue(ConfigUtil.isConfigFile("emissary.admin.ClassNameInventory.YAML"));
     }
 
     abstract static class SomeBaseClass {

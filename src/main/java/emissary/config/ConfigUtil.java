@@ -36,18 +36,8 @@ public class ConfigUtil {
     /** Constant string for files that end with {@value} */
     public static final String CONFIG_FILE_ENDING = ResourceReader.CONFIG_SUFFIX;
 
-    /** Constant string for files that end with "yaml or yml" */
-    public static final String YAML_FILE_ENDING = ResourceReader.YAML_SUFFIX;
-
-    /** Constant string for files that end with "yaml or yml" */
-    public static final String YML_FILE_ENDING = ResourceReader.YML_SUFFIX;
-
-    /** Constant string for files that end with {@value} */
-    public static final String TOML_FILE_ENDING = ResourceReader.TOML_SUFFIX;
-
     /** Config file endings in lookup order: legacy first, then structured formats. */
-    public static final List<String> STRUCTURED_FILE_ENDINGS =
-            List.of(CONFIG_FILE_ENDING, YAML_FILE_ENDING, YML_FILE_ENDING, TOML_FILE_ENDING);
+    public static final List<String> STRUCTURED_FILE_ENDINGS = ResourceReader.CONFIG_SUFFIXES;
 
     /** Constant string for files that end with {@value} */
     public static final String PROP_FILE_ENDING = ResourceReader.PROP_SUFFIX;
@@ -346,15 +336,17 @@ public class ConfigUtil {
             try {
                 c = getConfigInfo(s);
                 return c;
-            } catch (IOException ex) {
-                String exception = ex.getMessage();
-                if (exception.contains("IMPORT_FILE")) {
-                    exception = exception.replace("<none>", s);
+            } catch (ConfigParseException ex) {
+                // The file exists but is broken: abort instead of silently trying the next preference.
+                String message = ex.getMessage();
+                if (message != null && message.contains("IMPORT_FILE")) {
+                    message = message.replace("<none>", s);
                     logger.debug("IMPORT_FILE not found in {}", s);
-                    throw new IOException(exception);
-                } else {
-                    logger.debug("Preference {} not found", s);
+                    throw new IOException(message, ex);
                 }
+                throw ex;
+            } catch (IOException ex) {
+                logger.debug("Preference {} not found", s);
             }
         }
         throw new IOException("None of the " + preferences.size() + " preferences could be found: " + preferences);
@@ -370,15 +362,21 @@ public class ConfigUtil {
         for (final String candidate : candidateNames(name)) {
             final InputStream stream = getCandidateConfigStream(candidate);
             if (stream != null) {
-                // Parse errors are real failures; don't fall through to the next candidate.
-                return getConfigInfo(stream, candidate);
+                try {
+                    // Parse error, don't fall through to the next candidate.
+                    return getConfigInfo(stream, candidate);
+                } catch (IOException e) {
+                    throw new ConfigParseException(e.getMessage(), e);
+                }
             }
         }
         throw new IOException("No config stream available for " + name);
     }
 
     /**
-     * Get the configurator on the specified stream
+     * Get the configurator on the specified stream. The stream carries no name, so it always parses with the legacy
+     * tokenizer. For YAML or TOML content, use {@link #getConfigInfo(InputStream, String)} with the resource name (see
+     * {@code ResourceReader#findConfigDataName}).
      *
      * @param is the stream of data
      * @return configurator object
@@ -422,8 +420,12 @@ public class ConfigUtil {
         for (final String candidate : candidateNames(name)) {
             final InputStream stream = getCandidateConfigStream(candidate);
             if (stream != null) {
-                // Parse errors are real failures; don't fall through to the next candidate.
-                return new ServiceConfigGuide(stream, candidate);
+                try {
+                    // Parse error, don't fall through to the next candidate.
+                    return new ServiceConfigGuide(stream, candidate, false);
+                } catch (IOException e) {
+                    throw new ConfigParseException(e.getMessage(), e);
+                }
             }
         }
         throw new IOException("No config stream available for " + name);
@@ -468,16 +470,19 @@ public class ConfigUtil {
      * @return a list of candidate names
      */
     public static List<String> candidateNames(final String name) {
-        // Only .cfg falls back to structured variants; anything else resolves exactly as named.
-        if (!CONFIG_FILE_ENDING.equals(configFileSuffix(name))) {
-            return new ArrayList<>(List.of(name));
+        final String suffix = configFileSuffix(name);
+        if (suffix == null) {
+            return List.of(name);
         }
-        final String base = name.substring(0, name.length() - CONFIG_FILE_ENDING.length());
+        final String base = name.substring(0, name.length() - suffix.length());
         final List<String> candidates = new ArrayList<>();
+        candidates.add(name);
         for (final String ending : STRUCTURED_FILE_ENDINGS) {
-            candidates.add(base + ending);
+            if (!ending.equals(suffix)) {
+                candidates.add(base + ending);
+            }
         }
-        return candidates;
+        return List.copyOf(candidates);
     }
 
     /**
@@ -546,20 +551,21 @@ public class ConfigUtil {
      */
     private static List<String> toResourceName(final String name) {
         String r = name.replace('.', '/');
-        if (r.toUpperCase(Locale.getDefault()).endsWith("/CFG")) {
-            r = r.substring(0, r.length() - CONFIG_FILE_ENDING.length()) + CONFIG_FILE_ENDING;
-        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/YAML")) {
-            r = r.substring(0, r.length() - ResourceReader.YAML_SUFFIX.length()) + ResourceReader.YAML_SUFFIX;
-        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/YML")) {
-            r = r.substring(0, r.length() - ResourceReader.YML_SUFFIX.length()) + ResourceReader.YML_SUFFIX;
-        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/TOML")) {
-            r = r.substring(0, r.length() - ResourceReader.TOML_SUFFIX.length()) + ResourceReader.TOML_SUFFIX;
-        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/XML")) {
-            r = r.substring(0, r.length() - XML_FILE_ENDING.length()) + XML_FILE_ENDING;
-        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/PROPERTIES")) {
-            r = r.substring(0, r.length() - PROP_FILE_ENDING.length()) + PROP_FILE_ENDING;
-        } else if (r.toUpperCase(Locale.getDefault()).endsWith("/JS")) {
-            r = r.substring(0, r.length() - JS_FILE_ENDING.length()) + JS_FILE_ENDING;
+        final String[][] suffixRepairs = {
+                {"/CFG", CONFIG_FILE_ENDING},
+                {"/YAML", ResourceReader.YAML_SUFFIX},
+                {"/YML", ResourceReader.YML_SUFFIX},
+                {"/TOML", ResourceReader.TOML_SUFFIX},
+                {"/XML", XML_FILE_ENDING},
+                {"/PROPERTIES", PROP_FILE_ENDING},
+                {"/JS", JS_FILE_ENDING},
+        };
+        final String upper = r.toUpperCase(Locale.ROOT);
+        for (final String[] repair : suffixRepairs) {
+            if (upper.endsWith(repair[0])) {
+                r = r.substring(0, r.length() - repair[1].length()) + repair[1];
+                break;
+            }
         }
         final List<String> prefs = new ArrayList<>();
         if (configPkg != null) {
@@ -720,10 +726,10 @@ public class ConfigUtil {
                 }
             }
             if (scg == null) { // first one
-                scg = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName());
+                scg = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName(), false);
             } else {
                 final Set<String> existingKeys = scg.entryKeys();
-                final Configurator scgToMerge = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName());
+                final Configurator scgToMerge = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName(), false);
                 boolean noErrorsForFile = true;
                 for (final String key : scgToMerge.entryKeys()) {
                     if (existingKeys.contains(key)) {
@@ -745,27 +751,23 @@ public class ConfigUtil {
      * Whether a filename is a config file
      *
      * @param filename the config name to check
-     * @return true for files that end in {@code .cfg}, {@code .yaml}, {@code .yml}, or {@code .toml}
+     * @return true for config file names
      */
     static boolean isConfigFile(final String filename) {
-        for (final String ending : STRUCTURED_FILE_ENDINGS) {
-            if (filename.endsWith(ending)) {
-                return true;
-            }
-        }
-        return false;
+        return configFileSuffix(filename) != null;
     }
 
     /**
      * The config suffix of a filename
      *
      * @param filename the config name to check
-     * @return ({@code .cfg}, {@code .yaml}, {@code .yml}, or {@code .toml}), or null if it has none.
+     * @return the lowercase suffix, or null if it has none.
      */
     @Nullable
     public static String configFileSuffix(final String filename) {
+        final String lower = filename.toLowerCase(Locale.ROOT);
         for (final String ending : STRUCTURED_FILE_ENDINGS) {
-            if (filename.endsWith(ending)) {
+            if (lower.endsWith(ending)) {
                 return ending;
             }
         }

@@ -27,6 +27,7 @@ import java.util.Collections;
 import java.util.Enumeration;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.IdentityHashMap;
 import java.util.Iterator;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
@@ -66,6 +67,10 @@ public class ServiceConfigGuide implements Configurator, Serializable {
     protected List<ConfigEntry> removeParameters = new ArrayList<>();
 
     protected String operator;
+
+    // Whether inline flavor sections in structured configs are applied while parsing. Base views such as
+    // getBaseConfigInfo and the class name inventory turn this off; everything else leaves it on.
+    boolean applyInlineFlavors = true;
 
     // Start and end to a dynamic substitution
     protected static final String VSTART = "@{";
@@ -124,7 +129,7 @@ public class ServiceConfigGuide implements Configurator, Serializable {
         try {
             readConfigData(filename);
         } catch (ConfigSyntaxException ex) {
-            throw new IOException("Cannot parse configuration file " + ex.getMessage(), ex);
+            throw new IOException("Cannot parse configuration file " + filename + ": " + ex.getMessage(), ex);
         }
     }
 
@@ -138,7 +143,7 @@ public class ServiceConfigGuide implements Configurator, Serializable {
         try {
             readConfigData(is);
         } catch (ConfigSyntaxException ex) {
-            throw new IOException("Cannot parse configuration file " + ex.getMessage(), ex);
+            throw new IOException("Cannot parse unnamed configuration stream: " + ex.getMessage(), ex);
         }
     }
 
@@ -149,12 +154,24 @@ public class ServiceConfigGuide implements Configurator, Serializable {
      * @param name the name of the stream good for reporting errors
      */
     public ServiceConfigGuide(final InputStream is, final String name) throws IOException {
+        this(is, name, true);
+    }
+
+    /**
+     * Parse a config stream, optionally skipping inline flavor sections. Skipping yields the base entries only.
+     *
+     * @param is the InputStream
+     * @param name the name of the stream good for reporting errors
+     * @param applyInlineFlavors false to skip {@code "!flavor"} sections
+     */
+    public ServiceConfigGuide(final InputStream is, final String name, final boolean applyInlineFlavors) throws IOException {
         this();
+        this.applyInlineFlavors = applyInlineFlavors;
         try {
             readConfigData(is, name);
         } catch (ConfigSyntaxException ex) {
-            logger.error("Caught ConfigSytaxException {}", ex.getMessage());
-            throw new IOException("Cannot parse configuration file " + ex.getMessage(), ex);
+            final String suffix = name == null || name.isEmpty() || "UNKNOWN".equals(name) ? "" : " " + name;
+            throw new IOException("Cannot parse configuration file" + suffix + ": " + ex.getMessage(), ex);
         }
     }
 
@@ -201,12 +218,12 @@ public class ServiceConfigGuide implements Configurator, Serializable {
     }
 
     public void readConfigData(final InputStream is) throws IOException, ConfigSyntaxException {
-        readConfigData(is, "UNKNOWN");
+        readConfigData(is, null);
     }
 
 
-    protected void readConfigData(final InputStream is, final String filename) throws IOException, ConfigSyntaxException {
-        if (StructuredConfigParser.isStructuredFile(filename)) {
+    protected void readConfigData(final InputStream is, @Nullable final String filename) throws IOException, ConfigSyntaxException {
+        if (filename != null && StructuredConfigParser.isStructuredFile(filename)) {
             new StructuredConfigParser(this).read(is, filename);
             return;
         }
@@ -687,6 +704,34 @@ public class ServiceConfigGuide implements Configurator, Serializable {
                 i.remove();
             }
         }
+    }
+
+    /**
+     * Move the entries added since a mark to the top, preserving their order
+     *
+     * @param mark a value from {@link #markEntries()} taken before the entries were added
+     */
+    void promoteEntriesAfter(final Set<ConfigEntry> mark) {
+        final List<ConfigEntry> promoted = new ArrayList<>();
+        for (final Iterator<ConfigEntry> i = serviceParameters.iterator(); i.hasNext();) {
+            final ConfigEntry cur = i.next();
+            if (!mark.contains(cur)) {
+                promoted.add(cur);
+                i.remove();
+            }
+        }
+        serviceParameters.addAll(0, promoted);
+    }
+
+    /**
+     * Record the entries present now so that entries added afterwards can be promoted
+     *
+     * @return a mark to pass to {@link #promoteEntriesAfter(Set)}
+     */
+    Set<ConfigEntry> markEntries() {
+        final Set<ConfigEntry> mark = Collections.newSetFromMap(new IdentityHashMap<>());
+        mark.addAll(serviceParameters);
+        return mark;
     }
 
     /**

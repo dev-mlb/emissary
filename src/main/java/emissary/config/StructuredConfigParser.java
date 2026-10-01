@@ -14,6 +14,7 @@ import org.slf4j.LoggerFactory;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
@@ -30,7 +31,7 @@ public final class StructuredConfigParser {
     private final ServiceConfigGuide configG;
 
     /**
-     * Create the yaml/toml parser
+     * Create a parser that feeds the given guide.
      *
      * @param configG the service config guide
      */
@@ -52,7 +53,7 @@ public final class StructuredConfigParser {
          *
          * @return {@code array} for TOML, else {@code sequence}
          */
-        String collectionWord() {
+        String collectionKind() {
             return this == TOML ? "array" : "sequence";
         }
     }
@@ -64,7 +65,7 @@ public final class StructuredConfigParser {
      * @return true for {@code .yaml} and {@code .yml} names
      */
     public static boolean isYamlFile(final String filename) {
-        final String lower = filename.toLowerCase(Locale.getDefault());
+        final String lower = filename.toLowerCase(Locale.ROOT);
         return lower.endsWith(ResourceReader.YAML_SUFFIX) || lower.endsWith(ResourceReader.YML_SUFFIX);
     }
 
@@ -75,7 +76,7 @@ public final class StructuredConfigParser {
      * @return true for {@code .toml} names
      */
     public static boolean isTomlFile(final String filename) {
-        return filename.toLowerCase(Locale.getDefault()).endsWith(ResourceReader.TOML_SUFFIX);
+        return filename.toLowerCase(Locale.ROOT).endsWith(ResourceReader.TOML_SUFFIX);
     }
 
     /**
@@ -114,10 +115,29 @@ public final class StructuredConfigParser {
         try {
             flattenParsed(parseYamlDocument(is.readAllBytes(), filename), filename, Format.YAML);
         } catch (JsonProcessingException e) {
-            throw new IOException("Cannot parse YAML configuration " + parseLocation(filename, e) + ": " + e.getOriginalMessage(), e);
+            throw parseFailure(Format.YAML, filename, e);
+        } catch (IOException e) {
+            // Strict-mode and structural failures already carry their message; log once at the source.
+            logger.error("{}", e.getMessage());
+            throw e;
         } finally {
             is.close();
         }
+    }
+
+    /**
+     * Wrap a Jackson parse failure, logging it like the legacy tokenizer path does.
+     *
+     * @param format the config format
+     * @param filename the config name for error messages
+     * @param e Jackson parse failure
+     * @return the failure to throw
+     */
+    private static IOException parseFailure(final Format format, final String filename, final JsonProcessingException e) {
+        final IOException failure = new IOException("Cannot parse " + format + " config " + parseLocation(filename, e)
+                + ": " + e.getOriginalMessage(), e);
+        logger.error("{}", failure.getMessage());
+        return failure;
     }
 
     /**
@@ -137,7 +157,6 @@ public final class StructuredConfigParser {
             if (e.getOriginalMessage() == null || !e.getOriginalMessage().contains("Duplicate field")) {
                 throw e;
             }
-            // Mappings can't repeat keys; keep the last value with a warning (strict mode fails instead).
             final String detail = "YAML " + parseLocation(filename, e) + " contains duplicate keys ("
                     + e.getOriginalMessage() + "); use an array for multi-valued entries.";
             if (ConfigUtil.isStrictMode()) {
@@ -147,7 +166,7 @@ public final class StructuredConfigParser {
             try {
                 return new ObjectMapper(new YAMLFactory()).readValue(data, Object.class);
             } catch (JsonProcessingException retryFailure) {
-                throw new IOException("Cannot parse YAML configuration " + parseLocation(filename, retryFailure)
+                throw new IOException("Cannot parse YAML config " + parseLocation(filename, retryFailure)
                         + ": " + retryFailure.getOriginalMessage(), retryFailure);
             }
         }
@@ -164,9 +183,12 @@ public final class StructuredConfigParser {
     private void readToml(final InputStream is, final String filename) throws IOException {
         try {
             final ObjectMapper mapper = new ObjectMapper(new TomlFactory());
-            flattenParsed(mapper.readValue(is.readAllBytes(), Object.class), filename, Format.TOML);
+            flattenParsed(mapper.readValue(is, Object.class), filename, Format.TOML);
         } catch (JsonProcessingException e) {
-            throw new IOException("Cannot parse TOML configuration " + parseLocation(filename, e) + ": " + e.getOriginalMessage(), e);
+            throw parseFailure(Format.TOML, filename, e);
+        } catch (IOException e) {
+            logger.error("{}", e.getMessage());
+            throw e;
         } finally {
             is.close();
         }
@@ -185,7 +207,7 @@ public final class StructuredConfigParser {
         if (parsed instanceof Map) {
             flattenMap("", "$", (Map<String, Object>) parsed, filename, format, "=");
         } else if (parsed != null) {
-            final String kind = parsed instanceof List ? (format == Format.TOML ? "array" : "sequence") : "scalar";
+            final String kind = parsed instanceof List ? format.collectionKind() : "scalar";
             throw new IOException(format + " config " + filename + " must be a mapping at the top level, found " + kind);
         } else {
             logger.debug("{} config {} is empty, no entries loaded", format, filename);
@@ -207,9 +229,20 @@ public final class StructuredConfigParser {
     }
 
     /**
-     * Flatten a parsed mapping into config entries. Quoted top-level {@code !} keys are operators: {@code "!remove"},
-     * {@code "!import"}, {@code "!opt-import"}, and {@code "!flavor-NAME"} (or grouped {@code "!flavor": {NAME: ...}}). See
-     * {@code Sample.yaml} for the full mapping.
+     * One inline flavor section: its mapping and source path.
+     */
+    private static final class FlavorSection {
+        final Object value;
+        final String path;
+
+        FlavorSection(final Object value, final String path) {
+            this.value = value;
+            this.path = path;
+        }
+    }
+
+    /**
+     * Flatten a parsed mapping into config entries
      *
      * @param prefix flattened key prefix, empty at the top level
      * @param sourcePath dotted source path for error messages, starting at {@code $}
@@ -224,56 +257,83 @@ public final class StructuredConfigParser {
             final Format format, final String operatorArg)
             throws IOException {
         flattenEntries(prefix, sourcePath, map, filename, format, operatorArg, false, new LinkedHashMap<>());
-        if (!prefix.isEmpty()) {
+        if (!prefix.isEmpty() || !configG.applyInlineFlavors) {
             return;
         }
-        // Second pass: active flavor sections override the base entries flattened above.
+        // Collect flavor sections in document order, validating structure eagerly, then apply in
+        // flavor-property order so precedence matches file-based flavors, where the last flavor wins.
         final Set<String> activeFlavors = ConfigUtil.getUniqueFlavors();
+        final Map<String, FlavorSection> sections = new LinkedHashMap<>();
         for (final Map.Entry<String, Object> e : map.entrySet()) {
             final String rawKey = e.getKey();
             final String itemPath = sourcePath + "." + rawKey;
             if ("!flavor".equals(rawKey)) {
                 if (!(e.getValue() instanceof Map)) {
                     throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + itemPath
-                            + " must be a mapping, found " + valueKind(e.getValue()));
+                            + " must be a mapping, found " + valueKind(e.getValue(), format));
                 }
                 for (final Map.Entry<String, Object> group : ((Map<String, Object>) e.getValue()).entrySet()) {
-                    applyFlavorSection(group.getKey(), group.getValue(), itemPath + "." + group.getKey(), filename,
-                            format, activeFlavors);
+                    requireFlavorMapping(group.getKey(), group.getValue(), itemPath + "." + group.getKey(), filename, format);
+                    sections.put(group.getKey(),
+                            new FlavorSection(group.getValue(), itemPath + "." + group.getKey()));
                 }
             } else {
                 final String flavorName = flavorSectionName(rawKey);
                 if (flavorName != null) {
-                    applyFlavorSection(flavorName, e.getValue(), itemPath, filename, format, activeFlavors);
+                    requireFlavorMapping(flavorName, e.getValue(), itemPath, filename, format);
+                    sections.put(flavorName, new FlavorSection(e.getValue(), itemPath));
                 }
+            }
+        }
+        for (final String flavor : activeFlavors) {
+            final FlavorSection section = sections.get(flavor);
+            if (section != null) {
+                applyFlavorSection(flavor, section.value, section.path, filename, format);
+            }
+        }
+        if (logger.isDebugEnabled()) {
+            final Set<String> skipped = new LinkedHashSet<>(sections.keySet());
+            skipped.removeAll(activeFlavors);
+            for (final String flavor : skipped) {
+                logger.debug("Skipping inactive {} flavor section {} in {}", format, flavor, filename);
             }
         }
     }
 
     /**
-     * Apply one flavor section, skipping inactive flavors entirely. Entries are prepended like a file-based flavor merge so
-     * flavored values win lookups.
+     * Require a flavor section value to be a mapping.
+     *
+     * @param flavorName the flavor name
+     * @param value the section value
+     * @param itemPath dotted source path for error messages
+     * @param filename the config name for error messages
+     * @param format the config format
+     * @throws IOException when the value is not a mapping
+     */
+    private static void requireFlavorMapping(final String flavorName, final Object value, final String itemPath,
+            final String filename, final Format format) throws IOException {
+        if (!(value instanceof Map)) {
+            throw new IOException(format + " " + filename + " flavor \"" + flavorName + "\" at " + itemPath
+                    + " must be a mapping, found " + valueKind(value, format));
+        }
+    }
+
+    /**
+     * Apply one active flavor section. Entries are prepended like a file-based flavor merge so flavored values win lookups.
+     * Callers skip inactive flavors; structure is validated up front.
      *
      * @param flavorName the flavor name
      * @param value the section mapping
      * @param itemPath dotted source path for error messages
      * @param filename the config name for error messages
      * @param format the config format
-     * @param activeFlavors the enabled flavors
-     * @throws IOException on unsupported structure
+     * @throws IOException on entry failures
      */
     @SuppressWarnings("unchecked")
     private void applyFlavorSection(final String flavorName, final Object value, final String itemPath, final String filename,
-            final Format format, final Set<String> activeFlavors) throws IOException {
-        if (!(value instanceof Map)) {
-            throw new IOException(format + " " + filename + " flavor \"" + flavorName + "\" at " + itemPath
-                    + " must be a mapping, found " + valueKind(value));
-        }
-        if (activeFlavors.contains(flavorName)) {
-            flattenEntries("", itemPath, (Map<String, Object>) value, filename, format, "=", true, new LinkedHashMap<>());
-        } else {
-            logger.debug("Skipping inactive {} flavor section {} in {}", format, flavorName, filename);
-        }
+            final Format format) throws IOException {
+        requireFlavorMapping(flavorName, value, itemPath, filename, format);
+        flattenEntries("", itemPath, (Map<String, Object>) value, filename, format, "=", true, new LinkedHashMap<>());
     }
 
     /**
@@ -297,6 +357,18 @@ public final class StructuredConfigParser {
     }
 
     /**
+     * True for keys that carry parser meaning and are only honored at the top level. Nested occurrences are a mistake that
+     * would otherwise flatten into a garbage key such as {@code BAR_!=} instead of removing anything.
+     *
+     * @param rawKey the config key
+     * @return true when the key is an operator key
+     */
+    private static boolean isOperatorKey(final String rawKey) {
+        return "!remove".equals(rawKey) || "!import".equals(rawKey) || "!opt-import".equals(rawKey)
+                || "!=".equals(rawKey) || flavorSectionName(rawKey) != null;
+    }
+
+    /**
      * Flatten one mapping level into entries.
      *
      * @param prefix flattened key prefix, empty at the top level
@@ -317,7 +389,7 @@ public final class StructuredConfigParser {
             final String rawKey = e.getKey();
             final Object v = e.getValue();
             final String itemPath = sourcePath + "." + rawKey;
-            if (!prefix.isEmpty() && flavorSectionName(rawKey) != null) {
+            if (!prefix.isEmpty() && isOperatorKey(rawKey)) {
                 throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + itemPath
                         + " is only allowed at the top level");
             }
@@ -328,29 +400,35 @@ public final class StructuredConfigParser {
             if (prefix.isEmpty() && "!remove".equals(rawKey)) {
                 if (!(v instanceof Map)) {
                     throw new IOException(
-                            format + " " + filename + " key \"!remove\" at " + itemPath + " must be a mapping, found " + valueKind(v));
+                            format + " " + filename + " key \"!remove\" at " + itemPath + " must be a mapping, found " + valueKind(v, format));
                 }
                 flattenEntries("", itemPath, (Map<String, Object>) v, filename, format, "!=", prepend, emittedKeys);
                 continue;
             }
             if (prefix.isEmpty() && ("!import".equals(rawKey) || "!opt-import".equals(rawKey))) {
                 final String importKey = "!import".equals(rawKey) ? "IMPORT_FILE" : "OPT_IMPORT_FILE";
+                // Imports always append, so in a flavor section the imported entries would land below the base
+                // entries they should override. Promote them above instead.
+                final Set<ConfigEntry> mark = configG.markEntries();
                 if (v instanceof List) {
                     int i = 0;
                     for (final Object item : (List<Object>) v) {
                         final String elementPath = itemPath + "[" + i++ + "]";
                         if (item instanceof Map || item instanceof List) {
                             throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + elementPath
-                                    + " must be a scalar or " + format.collectionWord() + " of scalars, found nested " + valueKind(item));
+                                    + " must be a scalar or " + format.collectionKind() + " of scalars, found nested " + valueKind(item, format));
                         }
                         addMappedEntry(importKey, item, "=", filename, format, elementPath, false);
                     }
                 } else {
                     if (v instanceof Map) {
                         throw new IOException(format + " " + filename + " key \"" + rawKey + "\" at " + itemPath
-                                + " must be a scalar or " + format.collectionWord() + " of scalars, found mapping");
+                                + " must be a scalar or " + format.collectionKind() + " of scalars, found mapping");
                     }
                     addMappedEntry(importKey, v, "=", filename, format, itemPath, false);
+                }
+                if (prepend) {
+                    configG.promoteEntriesAfter(mark);
                 }
                 continue;
             }
@@ -363,7 +441,7 @@ public final class StructuredConfigParser {
                     final String elementPath = itemPath + "[" + i++ + "]";
                     if (item instanceof List) {
                         throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath
-                                + " must be a scalar or " + format.collectionWord() + " of scalars, found nested " + valueKind(item));
+                                + " must be a scalar or " + format.collectionKind() + " of scalars, found nested " + valueKind(item, format));
                     }
                     if (item instanceof Map) {
                         applySequenceOp(key, elementPath, item, filename, format);
@@ -401,7 +479,7 @@ public final class StructuredConfigParser {
                 for (final Object sub : (List<Object>) target) {
                     if (sub instanceof Map || sub instanceof List) {
                         throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath + "[" + i + "]"
-                                + " must be a scalar or " + format.collectionWord() + " of scalars, found nested " + valueKind(sub));
+                                + " must be a scalar or " + format.collectionKind() + " of scalars, found nested " + valueKind(sub, format));
                     }
                     addMappedEntry(key, sub, "!=", filename, format, elementPath + "[" + i++ + "]", false);
                 }
@@ -415,7 +493,7 @@ public final class StructuredConfigParser {
             return;
         }
         throw new IOException(format + " " + filename + " key \"" + key + "\" at " + elementPath
-                + " must be a scalar or " + format.collectionWord() + " of scalars, found nested " + valueKind(item)
+                + " must be a scalar or " + format.collectionKind() + " of scalars, found nested " + valueKind(item, format)
                 + "; sequence maps must be single-entry {\"!remove\": scalar-or-sequence}.");
     }
 
@@ -459,11 +537,16 @@ public final class StructuredConfigParser {
      * @param format the config format
      * @param sourcePath dotted source path for error messages
      * @param prepend true to insert at the top, for flavor overrides
-     * @throws IOException wrapping the entry failure
+     * @throws IOException when the value is null, or wrapping the entry failure
      */
     private void addMappedEntry(final String key, final Object value, final String operatorArg, final String filename,
             final Format format, final String sourcePath, final boolean prepend) throws IOException {
-        final String sval = value == null ? ServiceConfigGuide.NULL_VALUE : String.valueOf(value);
+        if (value == null) {
+            throw new IOException(format + " " + filename + " key '" + key + "' at " + sourcePath
+                    + " has no value; quote an empty string to set a blank value,"
+                    + " and use " + ServiceConfigGuide.NULL_VALUE + " to null the entry.");
+        }
+        final String sval = String.valueOf(value);
         try {
             configG.handleNewEntry(key, sval, operatorArg, filename, 0, prepend);
         } catch (IOException e) {
@@ -473,11 +556,11 @@ public final class StructuredConfigParser {
     }
 
     /** Value kind name for error messages. */
-    private static String valueKind(final Object v) {
+    private static String valueKind(final Object v, final Format format) {
         if (v instanceof Map) {
             return "mapping";
         } else if (v instanceof List) {
-            return "sequence";
+            return format.collectionKind();
         } else if (v == null) {
             return "null";
         }

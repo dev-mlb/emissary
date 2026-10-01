@@ -1,6 +1,8 @@
 package emissary.config;
 
 import emissary.test.core.junit5.UnitTest;
+import emissary.util.io.ResourceReader;
+import emissary.util.io.fixtures.YamlOnlyFixture;
 
 import jakarta.annotation.Nullable;
 import org.junit.jupiter.api.Assumptions;
@@ -52,6 +54,50 @@ class ServiceConfigGuideYamlTest extends UnitTest {
         final String yaml = "BASE: hello\nGREETING: \"@{BASE} world\"\n";
         final ServiceConfigGuide scg = parse(yaml, "test.yaml");
         assertEquals("hello world", scg.findStringEntry("GREETING"));
+    }
+
+    @Test
+    void testValuelessKey() {
+        final IOException e = assertThrows(IOException.class, () -> parse("FOO:\nBAR: x\n", "test.yaml"));
+        assertTrue(e.getMessage().contains("FOO") && e.getMessage().contains("no value"),
+                "Should name the key and say it has no value, was: " + e.getMessage());
+    }
+
+    @Test
+    void testValuelessKeyInSequence() {
+        final IOException e = assertThrows(IOException.class, () -> parse("FOO:\n  - a\n  -\n", "test.yaml"));
+        assertTrue(e.getMessage().contains("FOO") && e.getMessage().contains("no value"),
+                "A blank sequence item has no value either, was: " + e.getMessage());
+    }
+
+    @Test
+    void testValuelessKeyInFlavor(@TempDir final Path dir) throws Exception {
+        final String yaml = "KEY: base\n\"!flavor-F1\":\n  KEY:\n";
+        withConfigDirAndFlavor(dir, "F1", () -> {
+            final IOException e = assertThrows(IOException.class, () -> parse(yaml, "test.yaml"));
+            assertTrue(e.getMessage().contains("no value"), "Was: " + e.getMessage());
+        });
+    }
+
+    @Test
+    void testQuotedBlank() throws IOException {
+        // A quoted empty string is a real value, unlike a valueless key.
+        final ServiceConfigGuide scg = parse("FOO: \"\"\nBAR: x\n", "test.yaml");
+        assertEquals("", scg.findStringEntry("FOO"));
+    }
+
+    @Test
+    void testNullSentinel() throws IOException {
+        final ServiceConfigGuide scg = parse("FOO: \"<null>\"\n", "test.yaml");
+        assertNull(scg.findStringEntry("FOO"));
+    }
+
+    @Test
+    void testUnnamedStream() {
+        // Unnamed streams go through the legacy tokenizer, so YAML must not be reported as a spacing error.
+        final IOException e = assertThrows(IOException.class,
+                () -> new ServiceConfigGuide(new ByteArrayInputStream("FOO: bar\n".getBytes(UTF_8))));
+        assertTrue(e.getMessage().contains("unnamed"), "Should say the stream was unnamed, was: " + e.getMessage());
     }
 
     @Test
@@ -124,8 +170,10 @@ class ServiceConfigGuideYamlTest extends UnitTest {
     void testCandidateNames() {
         final List<String> cands = ConfigUtil.candidateNames("foo.cfg");
         assertEquals(List.of("foo.cfg", "foo.yaml", "foo.yml", "foo.toml"), cands);
-        assertEquals(List.of("foo.yaml"), ConfigUtil.candidateNames("foo.yaml"));
-        assertEquals(List.of("foo.yml"), ConfigUtil.candidateNames("foo.yml"));
+        assertEquals(List.of("foo.yaml", "foo.cfg", "foo.yml", "foo.toml"), ConfigUtil.candidateNames("foo.yaml"));
+        assertEquals(List.of("foo.yml", "foo.cfg", "foo.yaml", "foo.toml"), ConfigUtil.candidateNames("foo.yml"));
+        assertEquals(List.of("foo.toml", "foo.cfg", "foo.yaml", "foo.yml"), ConfigUtil.candidateNames("foo.toml"));
+        assertEquals(List.of("foo.txt"), ConfigUtil.candidateNames("foo.txt"));
     }
 
     @FunctionalInterface
@@ -172,6 +220,29 @@ class ServiceConfigGuideYamlTest extends UnitTest {
     }
 
     @Test
+    void testInlineFlavorsFollowPropertyOrder(@TempDir final Path dir) throws Exception {
+        // With several active flavors the last one in emissary.config.flavor wins, matching file-based
+        // flavors, regardless of document order.
+        Files.writeString(dir.resolve("emissary.test.DocOrderAB.yaml"),
+                "FOO: base\n\"!flavor-MYFLAV\":\n  FOO: myflav\n\"!flavor-CLUSTER\":\n  FOO: cluster\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.DocOrderBA.yaml"),
+                "FOO: base\n\"!flavor-CLUSTER\":\n  FOO: cluster\n\"!flavor-MYFLAV\":\n  FOO: myflav\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.FileOrder.cfg"), "FOO = \"base\"\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.FileOrder-MYFLAV.cfg"), "FOO = \"myflav\"\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.FileOrder-CLUSTER.cfg"), "FOO = \"cluster\"\n", UTF_8);
+        withConfigDirAndFlavor(dir, "CLUSTER,MYFLAV", () -> {
+            assertEquals("myflav", ConfigUtil.getConfigInfo("emissary.test.DocOrderAB.yaml").findStringEntry("FOO"));
+            assertEquals("myflav", ConfigUtil.getConfigInfo("emissary.test.DocOrderBA.yaml").findStringEntry("FOO"));
+            assertEquals("myflav", ConfigUtil.getConfigInfo("emissary.test.FileOrder.cfg").findStringEntry("FOO"));
+        });
+        withConfigDirAndFlavor(dir, "MYFLAV,CLUSTER", () -> {
+            assertEquals("cluster", ConfigUtil.getConfigInfo("emissary.test.DocOrderAB.yaml").findStringEntry("FOO"));
+            assertEquals("cluster", ConfigUtil.getConfigInfo("emissary.test.DocOrderBA.yaml").findStringEntry("FOO"));
+            assertEquals("cluster", ConfigUtil.getConfigInfo("emissary.test.FileOrder.cfg").findStringEntry("FOO"));
+        });
+    }
+
+    @Test
     void testFlavorInactiveSkipped(@TempDir final Path dir) throws Exception {
         Files.writeString(dir.resolve("app.yaml"),
                 "FOO: base\n\"!flavor-MYFLAV\":\n  FOO: flavored\n  EXTRA: 1\n", UTF_8);
@@ -196,6 +267,66 @@ class ServiceConfigGuideYamlTest extends UnitTest {
         withConfigDirAndFlavor(dir, null, () -> {
             assertEquals("base", ConfigUtil.getConfigInfo("app.yaml").findStringEntry("FOO"));
         });
+    }
+
+    @Test
+    void testFlavorImportOverridesBase(@TempDir final Path dir) throws Exception {
+        // An !import inside a flavor section promotes its entries above base entries, so lookups resolve to them.
+        Files.writeString(dir.resolve("prod.yaml"), "FOO: prod\n", UTF_8);
+        Files.writeString(dir.resolve("app.yaml"), "FOO: base\n\"!flavor-PROD\":\n  \"!import\": prod.yaml\n", UTF_8);
+        withConfigDirAndFlavor(dir, "PROD", () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("app.yaml");
+            assertEquals("prod", cfg.findStringEntry("FOO"));
+            assertEquals(List.of("prod", "base"), cfg.findEntries("FOO"));
+        });
+        withConfigDirAndFlavor(dir, null, () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("app.yaml");
+            assertEquals("base", cfg.findStringEntry("FOO"));
+        });
+    }
+
+    @Test
+    void testFlavorImportOrder(@TempDir final Path dir) throws Exception {
+        // Imported content keeps file order and lands above base entries, alongside the directive.
+        Files.writeString(dir.resolve("lib.yaml"), "LIB_A: 1\nLIB_B: 2\n", UTF_8);
+        Files.writeString(dir.resolve("app.yaml"),
+                "OWN: 0\n\"!flavor-PROD\":\n  EXTRA: 9\n  \"!import\":\n    - lib.yaml\n  TAIL: 8\n", UTF_8);
+        withConfigDirAndFlavor(dir, "PROD", () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("app.yaml");
+            assertEquals(List.of("9"), cfg.findEntries("EXTRA"));
+            assertEquals(List.of("1"), cfg.findEntries("LIB_A"));
+            assertEquals("0", cfg.findStringEntry("OWN"));
+            final List<String> keys = new ArrayList<>();
+            for (final ConfigEntry entry : cfg.getEntries()) {
+                keys.add(entry.getKey());
+            }
+            assertTrue(keys.indexOf("LIB_A") < keys.indexOf("OWN"), "Imported content sits above base entries: " + keys);
+            assertTrue(keys.indexOf("EXTRA") < keys.indexOf("OWN"), "Flavor entries sit above base entries: " + keys);
+        });
+    }
+
+    @Test
+    void testFlavorImportRemovingBase(@TempDir final Path dir) throws Exception {
+        // An import that removes more entries than it adds must not confuse the promotion of the imported entries.
+        Files.writeString(dir.resolve("drop.yaml"), "\"!remove\":\n  BAR: keep\n  BAZ: keep\n", UTF_8);
+        Files.writeString(dir.resolve("app.yaml"), "FOO: base\nBAR: keep\nBAZ: keep\n\"!flavor-PROD\":\n  \"!import\": drop.yaml\n", UTF_8);
+        withConfigDirAndFlavor(dir, "PROD", () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("app.yaml");
+            assertEquals("base", cfg.findStringEntry("FOO"));
+            assertEquals(List.of(), cfg.findEntries("BAR"));
+            assertEquals(List.of(), cfg.findEntries("BAZ"));
+        });
+    }
+
+    @Test
+    void testNestedOperatorKey() {
+        // Operator keys only mean something at the top level; nested ones would otherwise flatten into a junk key.
+        for (final String op : List.of("\"!=\"", "\"!remove\"", "\"!import\"", "\"!opt-import\"")) {
+            final IOException e = assertThrows(IOException.class,
+                    () -> new ServiceConfigGuide(new ByteArrayInputStream(
+                            ("FOO: base\nBAR:\n  " + op + ": keep\n").getBytes(UTF_8)), "app.yaml"));
+            assertTrue(e.getMessage().contains("only allowed at the top level"), e.getMessage());
+        }
     }
 
     @Test
@@ -238,7 +369,6 @@ class ServiceConfigGuideYamlTest extends UnitTest {
         } finally {
             System.clearProperty(ConfigUtil.STRICT_MODE_PROPERTY);
         }
-        // And loading works again once strict mode is off.
         assertDoesNotThrow(() -> parse("FOO: a\nFOO: b\n", "test.yaml"));
     }
 
@@ -512,6 +642,31 @@ class ServiceConfigGuideYamlTest extends UnitTest {
     }
 
     @Test
+    void testMixedFormatFlavor(@TempDir final Path dir) throws Exception {
+        // Migrating the base to YAML must not drop -FLAVOR.cfg overrides.
+        Files.writeString(dir.resolve("emissary.test.MixedFlav.yaml"), "BASE: 1\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.MixedFlav-CLUSTER.cfg"), "ONLY_FLAV = yaml-flavor\n", UTF_8);
+        withConfigDirAndFlavor(dir, "CLUSTER", () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("emissary.test.MixedFlav.yaml");
+            assertEquals("1", cfg.findStringEntry("BASE"));
+            assertEquals("yaml-flavor", cfg.findStringEntry("ONLY_FLAV"));
+        });
+    }
+
+    @Test
+    void testMixedFormatImportFlavor(@TempDir final Path dir) throws Exception {
+        Files.writeString(dir.resolve("shared.yaml"), "SHARED: s\n", UTF_8);
+        Files.writeString(dir.resolve("shared-CLUSTER.cfg"), "SHARED_FLAV = f\n", UTF_8);
+        Files.writeString(dir.resolve("main.yaml"), "\"!import\": shared.yaml\nOWN: o\n", UTF_8);
+        withConfigDirAndFlavor(dir, "CLUSTER", () -> {
+            final Configurator cfg = ConfigUtil.getConfigInfo("main.yaml");
+            assertEquals("o", cfg.findStringEntry("OWN"));
+            assertEquals("s", cfg.findStringEntry("SHARED"));
+            assertEquals("f", cfg.findStringEntry("SHARED_FLAV"));
+        });
+    }
+
+    @Test
     void testShortName(@TempDir final Path dir) throws Exception {
         Files.writeString(dir.resolve("ShortPlace.yml"), "FOO: short\n", UTF_8);
         final String orig = System.getProperty(ConfigUtil.CONFIG_DIR_PROPERTY);
@@ -526,6 +681,46 @@ class ServiceConfigGuideYamlTest extends UnitTest {
             }
             ConfigUtil.initialize();
         }
+    }
+
+    @Test
+    void testNamedStreamFromResourceReader(@TempDir final Path dir) throws Exception {
+        // A YAML-only resource resolves through the discovered name; the bare stream alone would
+        // legacy-parse and fail, so callers must pair getConfigDataAsStream with findConfigDataName.
+        withConfigDirAndFlavor(dir, null, () -> {
+            final ResourceReader rr = new ResourceReader();
+            final String name = rr.findConfigDataName(YamlOnlyFixture.class);
+            assertEquals("emissary/util/io/fixtures/YamlOnlyFixture.yaml", name);
+            try (InputStream is = rr.getResourceAsStream(name)) {
+                final Configurator cfg = ConfigUtil.getConfigInfo(is, name);
+                assertEquals("bar", cfg.findStringEntry("FOO"));
+                assertEquals("qux", cfg.findStringEntry("BAZ"));
+            }
+        });
+    }
+
+    @Test
+    void testBaseConfigSkipsInlineFlavors(@TempDir final Path dir) throws Exception {
+        // getBaseConfigInfo is the unflavored layer: inline sections must not leak into it.
+        Files.writeString(dir.resolve("emissary.test.DetailThing.yaml"),
+                "FOO: base\n\"!flavor-CLUSTER\":\n  FOO: flavored\n", UTF_8);
+        withConfigDirAndFlavor(dir, "CLUSTER", () -> {
+            final Configurator base = ConfigUtil.getBaseConfigInfo("emissary.test.DetailThing.cfg");
+            assertEquals(List.of("base"), base.findEntries("FOO"));
+            final Configurator full = ConfigUtil.getConfigInfo("emissary.test.DetailThing.cfg");
+            assertEquals("flavored", full.findStringEntry("FOO"));
+        });
+    }
+
+    @Test
+    void testInventoryIgnoresInlineFlavors(@TempDir final Path dir) throws Exception {
+        // Flavoring does not apply to the inventory, including inline sections.
+        Files.writeString(dir.resolve("emissary.admin.ClassNameInventory.yaml"),
+                "TestPlaceA: emissary.place.TestPlaceA\n\"!flavor-CLUSTER\":\n  TestPlaceA: emissary.place.OtherPlace\n", UTF_8);
+        withConfigDirAndFlavor(dir, "CLUSTER", () -> {
+            final Configurator cfg = ConfigUtil.getClassNameInventory();
+            assertEquals("emissary.place.TestPlaceA", cfg.findStringEntry("TestPlaceA"));
+        });
     }
 
     @Test

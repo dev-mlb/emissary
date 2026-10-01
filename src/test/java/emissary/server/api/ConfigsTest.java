@@ -2,6 +2,7 @@ package emissary.server.api;
 
 import emissary.client.response.Config;
 import emissary.client.response.ConfigsResponseEntity;
+import emissary.config.ConfigEntry;
 import emissary.config.ConfigUtil;
 
 import org.junit.jupiter.api.Test;
@@ -9,6 +10,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 
 import static java.nio.charset.StandardCharsets.UTF_8;
@@ -26,6 +28,7 @@ class ConfigsTest {
         assertDoesNotThrow(() -> Configs.validate("some.random.config.PlaceConfig.toml"));
         assertEquals("some.random.config.PlaceConfig.yaml", Configs.validate("some.random.config.PlaceConfig.yaml"));
         assertEquals("some.random.config.PlaceConfig.toml", Configs.validate("some.random.config.PlaceConfig.toml"));
+        assertEquals("some.random.config.PlaceConfig.YAML", Configs.validate("some.random.config.PlaceConfig.YAML"));
         assertEquals("some.random.config.PlaceConfig.cfg", Configs.validate("some.random.config.PlaceConfig"));
         assertThrows(IllegalArgumentException.class, () -> Configs.validate("/dev/some.random.config.PlaceConfig"));
         assertThrows(IllegalArgumentException.class, () -> Configs.validate("https://dev/some.random.config.PlaceConfig"));
@@ -91,9 +94,51 @@ class ConfigsTest {
         }
     }
 
+    @Test
+    void testDetailedBaseLayer(@TempDir final Path dir) throws Exception {
+        Files.writeString(dir.resolve("emissary.test.DetailCmdPlace.yaml"),
+                "FOO: base\n\"!flavor-CMD\":\n  FOO: inline\n", UTF_8);
+        final String origDir = System.getProperty(ConfigUtil.CONFIG_DIR_PROPERTY);
+        final String origFlav = System.getProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY);
+        System.setProperty(ConfigUtil.CONFIG_DIR_PROPERTY, dir.toString());
+        System.setProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY, "CMD");
+        ConfigUtil.initialize();
+        try {
+            final ConfigsResponseEntity detailed = Configs.getConfigsResponse("emissary.test.DetailCmdPlace.cfg", true);
+            final List<Config> layers = detailed.getLocal().getConfigs();
+            // Base layer is the unflavored file; the combined layer carries the inline flavor.
+            assertEquals(List.of("base"), entriesInLayer(layers, "emissary.test.DetailCmdPlace.cfg", "FOO"));
+            assertTrue(containsEntry(layers, "FOO", "inline"));
+        } finally {
+            if (origDir != null) {
+                System.setProperty(ConfigUtil.CONFIG_DIR_PROPERTY, origDir);
+            }
+            if (origFlav != null) {
+                System.setProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY, origFlav);
+            } else {
+                System.clearProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY);
+            }
+            ConfigUtil.initialize();
+        }
+    }
+
     private static boolean containsEntry(final List<Config> configs, final String key, final String value) {
         return configs.stream()
                 .flatMap(c -> c.getEntries().stream())
                 .anyMatch(e -> key.equals(e.getKey()) && value.equals(e.getValue()));
+    }
+
+    private static List<String> entriesInLayer(final List<Config> configs, final String configName, final String key) {
+        final List<String> values = new ArrayList<>();
+        for (final Config config : configs) {
+            if (config.getConfigs() != null && config.getConfigs().equals(List.of(configName))) {
+                for (final ConfigEntry entry : config.getEntries()) {
+                    if (key.equals(entry.getKey())) {
+                        values.add(entry.getValue());
+                    }
+                }
+            }
+        }
+        return values;
     }
 }

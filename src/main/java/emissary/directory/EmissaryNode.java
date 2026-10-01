@@ -66,7 +66,7 @@ public class EmissaryNode {
     public static final String DISABLE_LOG_REDIRECTION_PROPERTY = "emissary.log.redirection.disabled";
 
     /** Property that determines if server will shut down in the event a place fails to start */
-    public static final String STRICT_STARTUP_MODE = "strict.mode";
+    public static final String STRICT_STARTUP_MODE = ConfigUtil.STRICT_MODE_PROPERTY;
 
     /** Property that sets the max amount of time to wait for a refresh before a failure condition */
     public static final long DEFAULT_REFRESH_TIMEOUT = TimeUnit.MINUTES.toMillis(30);
