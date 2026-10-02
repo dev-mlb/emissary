@@ -13,11 +13,8 @@
 #                                       evaluated in order (e.g. add, remove, re-add)
 #   "!import" = file.toml   <=>  IMPORT_FILE = file.toml
 #   "!opt-import" = [a, b]  <=>  OPT_IMPORT_FILE entries (missing files are silent)
-#   ["!flavor-NAME"]        <=>  inline flavor overrides, applied only when NAME is an
-#                                active config flavor (like base-NAME.toml, but in one file).
-#                                "!flavor" = {NAME = {...}} is an equivalent grouped form.
-#                                Flavor entries win findStringEntry, matching file flavor merges.
-#                                Inactive flavor sections are skipped entirely.
+#
+# File-based flavors (base-NAME.toml) work as with .cfg.
 #
 # Gotchas:
 #   - Bare TOML values are only numbers and booleans; everything else is quoted.
@@ -29,9 +26,9 @@
 #   - Mapping keys cannot repeat: unlike legacy FOO = a / FOO = b (two entries),
 #     writing FOO twice fails to parse. Use an array for multi-valued entries.
 #   - Nested tables flatten with '_', so [NESTED] B_C = x and a literal NESTED_B_C = y
-#     key collide: both entries are kept (with a warning; --strict fails instead),
+#     key collide: both entries are kept (with a warning),
 #     lookups return the first while substitution sees the last. Rename one side.
-#   - "!import"/"!remove"/"!flavor-*" only work as top-level keys; nested tables flatten instead.
+#   - "!import"/"!remove" only work as top-level keys; nested tables flatten instead.
 #   - Only flat scalars and flat arrays are supported; nested collections throw.
 
 PLACE_NAME = "SamplePlace"
@@ -58,7 +55,3 @@ GREETING = "@{BASE} world"
 "!opt-import" = ["no-such-optional-file.yaml"]
 
 "!remove".UNWANTED = "*"
-
-# Inline flavor override: active only with -Demissary.config.flavor=MYFLAVOR.
-["!flavor-MYFLAVOR"]
-SERVICE_COST = 10

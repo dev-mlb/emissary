@@ -16,7 +16,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
-import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Properties;
@@ -37,7 +36,7 @@ public class ConfigUtil {
     public static final String CONFIG_FILE_ENDING = ResourceReader.CONFIG_SUFFIX;
 
     /** Config file endings in lookup order: legacy first, then structured formats. */
-    public static final List<String> STRUCTURED_FILE_ENDINGS = ResourceReader.CONFIG_SUFFIXES;
+    public static final List<String> CONFIG_FILE_ENDINGS = ResourceReader.CONFIG_SUFFIXES;
 
     /** Constant string for files that end with {@value} */
     public static final String PROP_FILE_ENDING = ResourceReader.PROP_SUFFIX;
@@ -77,9 +76,6 @@ public class ConfigUtil {
      * This property is the OUTPUT_ROOT, the root directory of local output
      */
     public static final String CONFIG_OUTPUT_ROOT_PROPERTY = "emissary.output.root";
-
-    /** When true, config warnings fail the load instead. Set by the {@code --strict} server flag. */
-    public static final String STRICT_MODE_PROPERTY = "strict.mode";
 
     public static final String PROJECT_BASE_ENV = "PROJECT_BASE";
 
@@ -302,7 +298,7 @@ public class ConfigUtil {
     public static Configurator getConfigInfo(final Class<?> c) throws IOException {
         final String base = c.getName();
         final List<String> prefs = new ArrayList<>();
-        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+        for (final String ending : CONFIG_FILE_ENDINGS) {
             prefs.add(base + ending);
         }
         return getConfigInfo(prefs);
@@ -337,9 +333,11 @@ public class ConfigUtil {
                 c = getConfigInfo(s);
                 return c;
             } catch (ConfigParseException ex) {
-                // The file exists but is broken: abort instead of silently trying the next preference.
                 String message = ex.getMessage();
-                if (message != null && message.contains("IMPORT_FILE")) {
+                if (message == null || message.isEmpty()) {
+                    message = "Cannot parse configuration " + s;
+                }
+                if (message.contains("IMPORT_FILE")) {
                     message = message.replace("<none>", s);
                     logger.debug("IMPORT_FILE not found in {}", s);
                     throw new IOException(message, ex);
@@ -363,7 +361,6 @@ public class ConfigUtil {
             final InputStream stream = getCandidateConfigStream(candidate);
             if (stream != null) {
                 try {
-                    // Parse error, don't fall through to the next candidate.
                     return getConfigInfo(stream, candidate);
                 } catch (IOException e) {
                     throw new ConfigParseException(e.getMessage(), e);
@@ -374,10 +371,9 @@ public class ConfigUtil {
     }
 
     /**
-     * Get the configurator on the specified stream. The stream carries no name, so it always parses with the legacy
-     * tokenizer. For YAML or TOML content, use {@link #getConfigInfo(InputStream, String)} with the resource name (see
-     * {@code ResourceReader#findConfigDataName}).
-     *
+     * Configurator for a nameless stream, parsed with the legacy tokenizer. Named YAML and TOML content requires
+     * {@link #getConfigInfo(InputStream, String)}.
+     * 
      * @param is the stream of data
      * @return configurator object
      */
@@ -421,8 +417,7 @@ public class ConfigUtil {
             final InputStream stream = getCandidateConfigStream(candidate);
             if (stream != null) {
                 try {
-                    // Parse error, don't fall through to the next candidate.
-                    return new ServiceConfigGuide(stream, candidate, false);
+                    return new ServiceConfigGuide(stream, candidate);
                 } catch (IOException e) {
                     throw new ConfigParseException(e.getMessage(), e);
                 }
@@ -456,15 +451,16 @@ public class ConfigUtil {
         for (final String candidate : candidateNames(name)) {
             try {
                 return getConfigStreamExact(candidate);
-            } catch (IOException ignored) {
-                // try the next candidate
+            } catch (IOException e) {
+                logger.debug("No config stream for candidate {}", candidate);
             }
         }
         throw new IOException("No config stream available for " + name);
     }
 
     /**
-     * Lookup candidates for a config name
+     * Candidate names for a config name, in lookup order. A name ending in a known suffix tries that exact name first,
+     * then the same base with every other known suffix. A name with no known suffix is returned as-is.
      *
      * @param name the name of the config to look for
      * @return a list of candidate names
@@ -477,7 +473,7 @@ public class ConfigUtil {
         final String base = name.substring(0, name.length() - suffix.length());
         final List<String> candidates = new ArrayList<>();
         candidates.add(name);
-        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+        for (final String ending : CONFIG_FILE_ENDINGS) {
             if (!ending.equals(suffix)) {
                 candidates.add(base + ending);
             }
@@ -486,7 +482,7 @@ public class ConfigUtil {
     }
 
     /**
-     * Open one candidate config stream, returning null instead of throwing when it does not resolve.
+     * Config stream for one candidate name, or null when it does not resolve.
      *
      * @param candidate the candidate config name
      * @return the stream, or null when unavailable
@@ -616,34 +612,6 @@ public class ConfigUtil {
     }
 
     /**
-     * Active config flavors as a set
-     *
-     * @return a set of config flavors, empty if no flavors
-     */
-    public static Set<String> getUniqueFlavors() {
-        final Set<String> flavors = new LinkedHashSet<>();
-        if (configFlavors == null) {
-            return flavors;
-        }
-        for (final String flavor : configFlavors.split(",")) {
-            final String trimmed = flavor.trim();
-            if (!trimmed.isEmpty()) {
-                flavors.add(trimmed);
-            }
-        }
-        return flavors;
-    }
-
-    /**
-     * Whether {@code --strict} startup mode is on
-     *
-     * @return true if strict mode, false otherwise
-     */
-    public static boolean isStrictMode() {
-        return Boolean.parseBoolean(System.getProperty(STRICT_MODE_PROPERTY, String.valueOf(false)));
-    }
-
-    /**
      * Add the current config Flavor to the name of the resource passed in. E.g. emissary.pkg.Foo.cfg =&gt;
      * emissary.pkg.Foo-${FLAVOR}.cfg
      *
@@ -726,10 +694,10 @@ public class ConfigUtil {
                 }
             }
             if (scg == null) { // first one
-                scg = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName(), false);
+                scg = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName());
             } else {
                 final Set<String> existingKeys = scg.entryKeys();
-                final Configurator scgToMerge = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName(), false);
+                final Configurator scgToMerge = new ServiceConfigGuide(Files.newInputStream(f.toPath()), f.getName());
                 boolean noErrorsForFile = true;
                 for (final String key : scgToMerge.entryKeys()) {
                     if (existingKeys.contains(key)) {
@@ -766,7 +734,7 @@ public class ConfigUtil {
     @Nullable
     public static String configFileSuffix(final String filename) {
         final String lower = filename.toLowerCase(Locale.ROOT);
-        for (final String ending : STRUCTURED_FILE_ENDINGS) {
+        for (final String ending : CONFIG_FILE_ENDINGS) {
             if (lower.endsWith(ending)) {
                 return ending;
             }

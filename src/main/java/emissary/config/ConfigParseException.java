@@ -3,18 +3,14 @@ package emissary.config;
 import java.io.IOException;
 
 /**
- * A config file was found but could not be parsed or fully loaded. Unlike a missing file, this aborts preference and
- * fallback lookups instead of silently moving on.
+ * Unparseable config file. Aborts preference and fallback lookups; missing files remain lookup misses.
  */
 public class ConfigParseException extends IOException {
 
-    /**
-     * provide uid for serialization
-     */
     private static final long serialVersionUID = 1L;
 
     /**
-     * Create a parse exception
+     * Parse exception.
      *
      * @param message a string to go along with the exception
      * @param cause the wrapped exception

@@ -280,18 +280,20 @@ Mapping to the legacy format (YAML first, TOML second):
 | `KEY: [a, {"!remove": v}, b]` | `KEY = ["a", {"!remove" = v}, "b"]` | positional removal, evaluated in order |
 | `"!import": file.yaml` | `"!import" = "file.toml"` | `IMPORT_FILE = file` |
 | `"!opt-import": [a, b]` | `"!opt-import" = [a, b]` | `OPT_IMPORT_FILE` entries |
-| `"!flavor-NAME": {...}` | `["!flavor-NAME"]` + keys | inline `base-NAME.cfg` overrides, active only with that flavor; with several active flavors the last one in `emissary.config.flavor` wins, as with files |
+
+File-based flavors (`base-NAME.yaml` / `base-NAME.toml`, like `base-NAME.cfg`) work as with `.cfg`.
 
 Notes: 
 - Quote the `!` keys, since a bare `!` starts a YAML tag. 
-- Quote any value that must stay a string: YAML coerces unquoted `yes`/`no`/`on`/`off` to booleans and `0xFF` to `255`,
+- Quote any value that must stay a string: YAML coerces unquoted `yes`/`no`/`on`/`off` to booleans, `0xFF` to `255`,
+`1.10` to `1.1`, and bare dates like `2024-01-01` to timestamps,
 where legacy config kept them literal. 
-- Give each mapping key only once — unlike repeated `KEY = ...` lines, a repeated key keeps just the last value (with a 
-  warning); use a  sequence for multi-valued entries. 
+- Give each mapping key only once — a repeated YAML key keeps the last value (duplicate TOML keys are a parse
+  error); use a sequence for multi-valued entries.
 - Every key needs a value. A valueless key (YAML `KEY:`) is a startup error rather than a silently nulled entry; use
   `""` for a blank value and `"<null>"` to null the entry, as in legacy config.
-- Starting the server with `--strict` turns duplicate keys and flatten collisions (e.g. `NESTED: {B_C: x}` vs a literal 
-  `NESTED_B_C: y`) into startup failures instead of warnings.
+- Flatten collisions (e.g. `NESTED: {B_C: x}` vs a literal
+  `NESTED_B_C: y`) log a warning and keep both entries; lookups return the first while substitution sees the last.
 - In TOML, dotted keys nest (`a.b = 1` becomes `A_B`), so quote dotted keys to keep them literal — and note that keys 
   after a `[table]` header belong to that table, while dotted keys never change the current table.
 

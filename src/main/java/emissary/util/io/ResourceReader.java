@@ -52,12 +52,9 @@ public class ResourceReader {
     }
 
     /**
-     * Return the config stream for the class config file Caller must close the stream. Falls back to structured formats
-     * when no {@code .cfg} resource exists.
-     * <p>
-     * The bare stream carries no name, so parsing it without one always uses the legacy tokenizer. When the resource may be
-     * YAML or TOML, resolve the name first with {@link #findConfigDataName(Class)} and parse with it, e.g.
-     * {@code ConfigUtil.getConfigInfo(stream, name)}.
+     * Config stream for the class config file, {@code .cfg} preferred. Caller must close the stream. Nameless streams parse
+     * with the legacy tokenizer; named YAML and TOML content requires parsing with its resource name (see
+     * {@link #findConfigDataName(Class)}).
      *
      * @param c the class name matching the desired resource
      */
@@ -75,8 +72,7 @@ public class ResourceReader {
     }
 
     /**
-     * Find the existing config resource name for the class, trying {@code .cfg} first then structured formats. Pair the
-     * result with {@link #getResourceAsStream(String)} and parse with the name so YAML and TOML dispatch correctly.
+     * Existing config resource name for the class, {@code .cfg} preferred.
      *
      * @param o the object whose class name matches the resource
      * @return the first existing resource name, or null when none exists
@@ -87,8 +83,7 @@ public class ResourceReader {
     }
 
     /**
-     * Find the existing config resource name for the class, trying {@code .cfg} first then structured formats. Pair the
-     * result with {@link #getResourceAsStream(String)} and parse with the name so YAML and TOML dispatch correctly.
+     * Existing config resource name for the class, {@code .cfg} preferred.
      *
      * @param c the class name matching the desired resource
      * @return the first existing resource name, or null when none exists

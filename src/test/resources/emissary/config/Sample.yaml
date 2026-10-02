@@ -13,29 +13,26 @@
 #                                            evaluated in order (e.g. add, remove, re-add)
 #   "!import": file.yaml      <=>  IMPORT_FILE = file.yaml
 #   "!opt-import": [a, b]     <=>  OPT_IMPORT_FILE entries (missing files are silent)
-#   "!flavor-NAME": {...}     <=>  inline flavor overrides, applied only when NAME is an
-#                                  active config flavor (like base-NAME.yaml, but in one file).
-#                                  "!flavor": {NAME: {...}} is an equivalent grouped form.
-#                                  Flavor entries win findStringEntry, matching file flavor merges.
-#                                  Inactive flavor sections are skipped entirely.
+#
+# File-based flavors (base-NAME.yaml) work as with .cfg.
 #
 # Gotchas:
 #   - Quote anything that must stay a string: YAML coerces unquoted scalars, so
 #       YES_WORD: "yes"     stays "yes"     (unquoted yes/no/on/off become true/false)
 #       HEX_ID: "0xFF"       stays "0xFF"     (unquoted 0xFF becomes 255)
 #       VERSION: "07"        stays "07"       (unquoted 07 becomes 7)
+#       STAMP: "2024-01-01"  stays "2024-01-01"  (unquoted dates become timestamps)
+#       RATIO: "1.10"        stays "1.10"     (unquoted 1.10 becomes 1.1)
 #     Legacy .cfg kept all of these as literal strings, so quote pasted IDs/versions.
 #   - Unicode escapes are processed twice: YAML resolves them in double-quoted strings
 #     ("A" is already A before the config reader sees it), while single-quoted
 #     '\u0041' is resolved by the config reader's own \u handling. Prefer double quotes.
 #   - Mapping keys cannot repeat: unlike legacy FOO = a / FOO = b (two entries),
-#     writing FOO twice keeps only the last value (and logs a warning). Use a
-#     sequence (KEY: [a, b]) for multi-valued entries. Start the server with
-#     --strict (or -Dstrict.mode=true) to turn duplicate keys into a startup failure.
+#     writing FOO twice keeps the last value. Use a sequence (KEY: [a, b]) for multi-valued entries.
 #   - Nested maps flatten with '_', so NESTED: {B_C: x} and a literal NESTED_B_C: y
-#     key collide: both entries are kept (with a warning; --strict fails instead),
+#     key collide: both entries are kept (with a warning),
 #     lookups return the first while substitution sees the last. Rename one side.
-#   - "!import"/"!remove"/"!flavor-*" only work as top-level keys; nested maps flatten instead.
+#   - "!import"/"!remove" only work as top-level keys; nested maps flatten instead.
 #   - Only flat scalars and flat sequences are supported; nested collections throw.
 
 PLACE_NAME: SamplePlace
@@ -63,7 +60,3 @@ GREETING: "@{BASE} world"
 
 "!remove":
   UNWANTED: "*"
-
-# Inline flavor override: active only with -Demissary.config.flavor=MYFLAVOR.
-"!flavor-MYFLAVOR":
-  SERVICE_COST: 10

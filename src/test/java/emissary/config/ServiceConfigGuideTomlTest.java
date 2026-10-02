@@ -2,7 +2,6 @@ package emissary.config;
 
 import emissary.test.core.junit5.UnitTest;
 
-import jakarta.annotation.Nullable;
 import org.junit.jupiter.api.Assumptions;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -115,45 +114,6 @@ class ServiceConfigGuideTomlTest extends UnitTest {
         });
     }
 
-    @Test
-    void testInlineFlavor(@TempDir final Path dir) throws Exception {
-        Files.writeString(dir.resolve("app.toml"),
-                "FOO = \"base\"\n[\"!flavor-MYFLAV\"]\nFOO = \"flavored\"\nEXTRA = \"1\"\n", UTF_8);
-        withFlavor(dir, "MYFLAV", () -> {
-            final Configurator cfg = ConfigUtil.getConfigInfo("app.toml");
-            assertEquals("flavored", cfg.findStringEntry("FOO"));
-            assertEquals("1", cfg.findStringEntry("EXTRA"));
-        });
-        withFlavor(dir, null, () -> {
-            final Configurator cfg = ConfigUtil.getConfigInfo("app.toml");
-            assertEquals("base", cfg.findStringEntry("FOO"));
-        });
-    }
-
-    @Test
-    void testFlavorImportOverridesBase(@TempDir final Path dir) throws Exception {
-        Files.writeString(dir.resolve("prod.toml"), "FOO = \"prod\"\n", UTF_8);
-        Files.writeString(dir.resolve("app.toml"),
-                "FOO = \"base\"\n[\"!flavor-PROD\"]\n\"!import\" = \"prod.toml\"\n", UTF_8);
-        withFlavor(dir, "PROD", () -> {
-            final Configurator cfg = ConfigUtil.getConfigInfo("app.toml");
-            assertEquals("prod", cfg.findStringEntry("FOO"));
-            assertEquals(List.of("prod", "base"), cfg.findEntries("FOO"));
-        });
-    }
-
-    @Test
-    void testInlineFlavorsFollowPropertyOrder(@TempDir final Path dir) throws Exception {
-        // Like YAML: last flavor in emissary.config.flavor wins, regardless of document order.
-        Files.writeString(dir.resolve("multi.toml"),
-                "FOO = \"base\"\n[\"!flavor-MYFLAV\"]\nFOO = \"myflav\"\n[\"!flavor-CLUSTER\"]\nFOO = \"cluster\"\n", UTF_8);
-        withFlavor(dir, "CLUSTER,MYFLAV", () -> {
-            assertEquals("myflav", ConfigUtil.getConfigInfo("multi.toml").findStringEntry("FOO"));
-        });
-        withFlavor(dir, "MYFLAV,CLUSTER", () -> {
-            assertEquals("cluster", ConfigUtil.getConfigInfo("multi.toml").findStringEntry("FOO"));
-        });
-    }
 
     @Test
     void testCfgFallsBackToToml(@TempDir final Path dir) throws Exception {
@@ -241,32 +201,6 @@ class ServiceConfigGuideTomlTest extends UnitTest {
         } finally {
             if (orig != null) {
                 System.setProperty(ConfigUtil.CONFIG_DIR_PROPERTY, orig);
-            }
-            ConfigUtil.initialize();
-        }
-    }
-
-    private static void withFlavor(final Path dir, @Nullable final String flavor, final ThrowingRunnable test)
-            throws Exception {
-        final String origDir = System.getProperty(ConfigUtil.CONFIG_DIR_PROPERTY);
-        final String origFlav = System.getProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY);
-        System.setProperty(ConfigUtil.CONFIG_DIR_PROPERTY, dir.toString());
-        if (flavor != null) {
-            System.setProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY, flavor);
-        } else {
-            System.clearProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY);
-        }
-        ConfigUtil.initialize();
-        try {
-            test.run();
-        } finally {
-            if (origDir != null) {
-                System.setProperty(ConfigUtil.CONFIG_DIR_PROPERTY, origDir);
-            }
-            if (origFlav != null) {
-                System.setProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY, origFlav);
-            } else {
-                System.clearProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY);
             }
             ConfigUtil.initialize();
         }

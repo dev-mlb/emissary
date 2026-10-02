@@ -2,7 +2,6 @@ package emissary.config;
 
 import emissary.core.EmissaryException;
 import emissary.core.EmissaryRuntimeException;
-import emissary.directory.EmissaryNode;
 import emissary.test.core.junit5.UnitTest;
 import emissary.util.shell.Executrix;
 
@@ -170,27 +169,20 @@ class ConfigUtilTest extends UnitTest {
     }
 
     @Test
-    void testStrictDuplicate(@TempDir final Path dir) throws Exception {
-        // Strict mode must not be bypassed by falling through to the next preference.
-        Files.writeString(dir.resolve("dup.yaml"), "FOO: a\nFOO: b\n", UTF_8);
+    void testBrokenYamlAbortsPreferences(@TempDir final Path dir) throws Exception {
+        // A broken file aborts preference lookup instead of falling through to the next preference.
+        Files.writeString(dir.resolve("bad.yaml"), "FOO: [unclosed\n", UTF_8);
         Files.writeString(dir.resolve("other.cfg"), "WHO = \"other\"\n", UTF_8);
         final String origDir = System.getProperty(CONFIG_DIR_PROPERTY);
-        final String origStrict = System.getProperty(ConfigUtil.STRICT_MODE_PROPERTY);
         System.setProperty(CONFIG_DIR_PROPERTY, dir.toString());
-        System.setProperty(ConfigUtil.STRICT_MODE_PROPERTY, "true");
         ConfigUtil.initialize();
         try {
             final IOException e = assertThrows(IOException.class,
-                    () -> ConfigUtil.getConfigInfo(List.of("dup.cfg", "other.cfg")));
-            assertTrue(e.getMessage().contains("strict"), "Was: " + e.getMessage());
+                    () -> ConfigUtil.getConfigInfo(List.of("bad.cfg", "other.cfg")));
+            assertTrue(e.getMessage().contains("bad.yaml"), "Was: " + e.getMessage());
         } finally {
             if (origDir != null) {
                 System.setProperty(CONFIG_DIR_PROPERTY, origDir);
-            }
-            if (origStrict != null) {
-                System.setProperty(ConfigUtil.STRICT_MODE_PROPERTY, origStrict);
-            } else {
-                System.clearProperty(ConfigUtil.STRICT_MODE_PROPERTY);
             }
             ConfigUtil.initialize();
         }
@@ -780,12 +772,6 @@ class ConfigUtilTest extends UnitTest {
     void testClassInstantiationNotSubType() {
         String cfgFile = "emissary.config.ClassInstantiationTest.cfg";
         assertThrows(ClassCastException.class, () -> ConfigUtil.instantiateFromConfig(String.class, cfgFile));
-    }
-
-    @Test
-    void testStrictModeProperty() {
-        assertEquals(EmissaryNode.STRICT_STARTUP_MODE, ConfigUtil.STRICT_MODE_PROPERTY,
-                "Renaming either constant must not silently fork the property");
     }
 
     @Test

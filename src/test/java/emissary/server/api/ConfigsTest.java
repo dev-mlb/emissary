@@ -96,8 +96,8 @@ class ConfigsTest {
 
     @Test
     void testDetailedBaseLayer(@TempDir final Path dir) throws Exception {
-        Files.writeString(dir.resolve("emissary.test.DetailCmdPlace.yaml"),
-                "FOO: base\n\"!flavor-CMD\":\n  FOO: inline\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.DetailCmdPlace.yaml"), "FOO: base\n", UTF_8);
+        Files.writeString(dir.resolve("emissary.test.DetailCmdPlace-CMD.yaml"), "FOO: inline\n", UTF_8);
         final String origDir = System.getProperty(ConfigUtil.CONFIG_DIR_PROPERTY);
         final String origFlav = System.getProperty(ConfigUtil.CONFIG_FLAVOR_PROPERTY);
         System.setProperty(ConfigUtil.CONFIG_DIR_PROPERTY, dir.toString());
@@ -106,7 +106,7 @@ class ConfigsTest {
         try {
             final ConfigsResponseEntity detailed = Configs.getConfigsResponse("emissary.test.DetailCmdPlace.cfg", true);
             final List<Config> layers = detailed.getLocal().getConfigs();
-            // Base layer is the unflavored file; the combined layer carries the inline flavor.
+            // Base layer is the unflavored file; the combined layer carries the file flavor.
             assertEquals(List.of("base"), entriesInLayer(layers, "emissary.test.DetailCmdPlace.cfg", "FOO"));
             assertTrue(containsEntry(layers, "FOO", "inline"));
         } finally {
