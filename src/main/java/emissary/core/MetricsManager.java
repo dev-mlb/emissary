@@ -20,15 +20,33 @@ import com.codahale.metrics.jvm.FileDescriptorRatioGauge;
 import com.codahale.metrics.jvm.GarbageCollectorMetricSet;
 import com.codahale.metrics.jvm.MemoryUsageGaugeSet;
 import com.codahale.metrics.jvm.ThreadStatesGaugeSet;
+import io.micrometer.core.instrument.Clock;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Tag;
+import io.micrometer.core.instrument.Tags;
+import io.micrometer.core.instrument.composite.CompositeMeterRegistry;
+import io.micrometer.graphite.GraphiteConfig;
+import io.micrometer.graphite.GraphiteMeterRegistry;
+import io.micrometer.graphite.GraphiteProtocol;
+import io.micrometer.jmx.JmxConfig;
+import io.micrometer.jmx.JmxMeterRegistry;
+import io.micrometer.prometheusmetrics.PrometheusConfig;
+import io.micrometer.prometheusmetrics.PrometheusMeterRegistry;
+import jakarta.annotation.Nullable;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.time.Duration;
+import java.time.format.DateTimeParseException;
+import java.util.Locale;
 import java.util.Map;
 import java.util.SortedMap;
 import java.util.TreeMap;
 import java.util.concurrent.TimeUnit;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Manages the interactions with CodaHale's Metrics package, including configuration
@@ -36,6 +54,16 @@ import java.util.concurrent.TimeUnit;
 public class MetricsManager {
 
     public static final String DEFAULT_NAMESPACE_NAME = "MetricsManager";
+
+    /**
+     * Default prefix used when naming metrics
+     */
+    public static final String DEFAULT_METRICS_PREFIX = "emissary";
+
+    /**
+     * Matches simple duration specifications like 10s, 5m, 1h, 2d
+     */
+    private static final Pattern SIMPLE_DURATION = Pattern.compile("^(\\d+)\\s*([smhd])$");
 
     @SuppressWarnings("rawtypes")
     public static final SortedMap<String, Gauge> EMPTY_GUAGES = new TreeMap<>();
@@ -47,6 +75,27 @@ public class MetricsManager {
 
     protected final MetricRegistry metrics = new MetricRegistry();
     protected final HealthCheckRegistry healthChecks = new HealthCheckRegistry();
+
+    /**
+     * Micrometer registry that meters are recorded into. Registries are only added to it when explicitly enabled in the
+     * configuration, so an unconfigured composite exports nothing.
+     */
+    protected final CompositeMeterRegistry meters = new CompositeMeterRegistry();
+
+    /**
+     * The prometheus registry, when prometheus metrics are enabled
+     */
+    protected PrometheusMeterRegistry prometheusRegistry;
+
+    /**
+     * Prefix to use when naming metrics
+     */
+    protected String metricsPrefix = DEFAULT_METRICS_PREFIX;
+
+    /**
+     * Tags applied to every registry
+     */
+    protected Tags commonTags = Tags.empty();
 
     protected final Slf4jReporter reporter;
     protected Configurator conf;
@@ -85,6 +134,34 @@ public class MetricsManager {
         return this.metrics;
     }
 
+    /**
+     * Get the micrometer registry that meters should be recorded into
+     *
+     * @return the micrometer registry that meters should be recorded into
+     */
+    public CompositeMeterRegistry getMeterRegistry() {
+        return this.meters;
+    }
+
+    /**
+     * Get the prometheus registry when prometheus metrics are enabled
+     *
+     * @return the prometheus registry when prometheus metrics are enabled, otherwise null
+     */
+    @Nullable
+    public PrometheusMeterRegistry getPrometheusRegistry() {
+        return this.prometheusRegistry;
+    }
+
+    /**
+     * Get the prefix used when naming metrics
+     *
+     * @return the prefix used when naming metrics
+     */
+    public String getMetricsPrefix() {
+        return this.metricsPrefix;
+    }
+
     public HealthCheckRegistry getHealthCheckRegistry() {
         return this.healthChecks;
     }
@@ -105,6 +182,7 @@ public class MetricsManager {
         }
 
         initMetrics();
+        initMicrometer();
         initHealthChecks();
         initJmxReporter();
         initGraphiteReporter();
@@ -129,6 +207,197 @@ public class MetricsManager {
             this.metrics.register("file.descriptor.info", new FileDescriptorRatioGauge());
         } else {
             logger.debug("JVM Metrics are disabled");
+        }
+    }
+
+    /**
+     * Wire up the micrometer registries that meters may be recorded into. Nothing is registered unless explicitly enabled,
+     * so a default configuration exports nothing.
+     *
+     * Note that this is called from the constructor, so an override must not depend on subclass state that is not yet
+     * initialized.
+     */
+    protected void initMicrometer() {
+        this.metricsPrefix = this.conf.findStringEntry("METRICS_PREFIX", DEFAULT_METRICS_PREFIX);
+        this.commonTags = parseCommonTags();
+
+        // tag the composite so that meters recorded directly into it carry the common tags
+        applyCommonTags(this.meters);
+
+        initPrometheusRegistry();
+        initMicrometerJmxRegistry();
+        initMicrometerGraphiteRegistry();
+    }
+
+    /**
+     * Initialize the prometheus registry
+     */
+    protected void initPrometheusRegistry() {
+        if (!this.conf.findBooleanEntry("PROMETHEUS_METRICS_ENABLED", false)) {
+            logger.debug("Prometheus Metrics are disabled");
+            return;
+        }
+
+        logger.debug("Prometheus Metrics are enabled");
+
+        final PrometheusMeterRegistry registry = new PrometheusMeterRegistry(PrometheusConfig.DEFAULT);
+        this.prometheusRegistry = registry;
+        addMeterRegistry(registry);
+    }
+
+    /**
+     * Initialize the micrometer jmx registry
+     */
+    protected void initMicrometerJmxRegistry() {
+        if (!this.conf.findBooleanEntry("MICROMETER_JMX_ENABLED", false)) {
+            logger.debug("Micrometer JMX Metrics are disabled");
+            return;
+        }
+
+        logger.debug("Micrometer JMX Metrics are enabled");
+
+        final JmxMeterRegistry registry = new JmxMeterRegistry(JmxConfig.DEFAULT, Clock.SYSTEM);
+        addMeterRegistry(registry);
+    }
+
+    /**
+     * Initialize the micrometer graphite registry
+     */
+    protected void initMicrometerGraphiteRegistry() {
+        if (!this.conf.findBooleanEntry("MICROMETER_GRAPHITE_ENABLED", false)) {
+            logger.debug("Micrometer Graphite Metrics are disabled");
+            return;
+        }
+
+        logger.debug("Micrometer Graphite Metrics are enabled");
+
+        final String host = this.conf.findStringEntry("MICROMETER_GRAPHITE_HOST", "localhost");
+        final int port = this.conf.findIntEntry("MICROMETER_GRAPHITE_PORT", 2003);
+        final Duration step = parseDuration(this.conf.findStringEntry("MICROMETER_GRAPHITE_STEP", "1m"));
+        final GraphiteProtocol protocol = parseGraphiteProtocol(this.conf.findStringEntry("MICROMETER_GRAPHITE_PROTOCOL", "plaintext"));
+
+        if (step.getSeconds() < 1) {
+            throw new IllegalArgumentException("MICROMETER_GRAPHITE_STEP must be at least one second, was " + step);
+        }
+
+        final GraphiteConfig config = new GraphiteConfig() {
+            @Override
+            @Nullable
+            public String get(final String key) {
+                return null;
+            }
+
+            @Override
+            public String host() {
+                return host;
+            }
+
+            @Override
+            public int port() {
+                return port;
+            }
+
+            @Override
+            public Duration step() {
+                return step;
+            }
+
+            @Override
+            public GraphiteProtocol protocol() {
+                return protocol;
+            }
+        };
+        final GraphiteMeterRegistry registry = new GraphiteMeterRegistry(config, Clock.SYSTEM);
+        addMeterRegistry(registry);
+    }
+
+    /**
+     * Add a registry to the composite registry that meters are recorded into
+     *
+     * @param registry the registry to add
+     */
+    protected void addMeterRegistry(final MeterRegistry registry) {
+        applyCommonTags(registry);
+        this.meters.add(registry);
+    }
+
+    /**
+     * Parse the repeatable COMMON_TAGS configuration entries, each of the form key=value
+     *
+     * @return the tags to apply to every registry, empty when none are configured
+     */
+    protected Tags parseCommonTags() {
+        Tags tags = Tags.empty();
+
+        for (final String entry : this.conf.findEntries("COMMON_TAGS")) {
+            final int index = entry.indexOf('=');
+
+            if (index <= 0) {
+                logger.warn("Ignoring malformed COMMON_TAGS entry: {}", entry);
+                continue;
+            }
+
+            tags = tags.and(entry.substring(0, index).trim(), entry.substring(index + 1).trim());
+        }
+
+        return tags;
+    }
+
+    /**
+     * Apply the common tags to a registry
+     *
+     * @param registry the registry to tag
+     */
+    protected void applyCommonTags(final MeterRegistry registry) {
+        for (final Tag tag : this.commonTags) {
+            logger.debug("Applying common tag {}={}", tag.getKey(), tag.getValue());
+        }
+        registry.config().commonTags(this.commonTags);
+    }
+
+    /**
+     * Parse a duration expressed either in simple form (10s, 5m, 1h, 2d) or in ISO-8601 form
+     *
+     * @param value the duration to parse
+     * @return the parsed duration
+     */
+    protected Duration parseDuration(final String value) {
+        final Matcher matcher = SIMPLE_DURATION.matcher(value.trim());
+
+        if (matcher.matches()) {
+            final long amount = Long.parseLong(matcher.group(1));
+            switch (matcher.group(2)) {
+                case "s":
+                    return Duration.ofSeconds(amount);
+                case "m":
+                    return Duration.ofMinutes(amount);
+                case "h":
+                    return Duration.ofHours(amount);
+                case "d":
+                    return Duration.ofDays(amount);
+                default:
+                    break;
+            }
+        }
+
+        try {
+            return Duration.parse(value.trim());
+        } catch (DateTimeParseException e) {
+            throw new IllegalArgumentException("Invalid duration '" + value + "', expected a value like 30s, 5m, 1h, 2d or an ISO-8601 duration", e);
+        }
+    }
+
+    /**
+     * Parse the graphite protocol to use, which must be one of plaintext, udp or pickled
+     *
+     * @param value the protocol name
+     * @return the parsed protocol
+     */
+    protected GraphiteProtocol parseGraphiteProtocol(final String value) {
+        try {
+            return GraphiteProtocol.valueOf(value.trim().toUpperCase(Locale.ROOT));
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("Invalid graphite protocol '" + value + "', expected one of plaintext, udp or pickled", e);
         }
     }
 
@@ -204,6 +473,7 @@ public class MetricsManager {
 
     public void shutdown() {
         this.healthChecks.shutdown();
+        this.meters.close();
         this.metrics.getMetrics().keySet().forEach(metrics::remove);
         this.metrics.getTimers().keySet().forEach(metrics::remove);
         this.metrics.getCounters().keySet().forEach(metrics::remove);
